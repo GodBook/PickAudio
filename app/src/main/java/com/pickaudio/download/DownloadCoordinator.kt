@@ -315,4 +315,34 @@ class DownloadCoordinator(
 
         return itemUri
     }
+
+    suspend fun deleteDownloadForTrack(trackId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val activeKeys = activeJobs.keys.toList()
+            for (k in activeKeys) {
+                val task = downloadDao.getTaskById(k)
+                if (task?.trackId == trackId) {
+                    activeJobs.remove(k)?.cancel()
+                }
+            }
+
+            val assets = localAssetDao.getAssetsForTrack(trackId)
+            for (asset in assets) {
+                if (asset.sourceType == "DOWNLOADED") {
+                    try {
+                        val uri = Uri.parse(asset.uri)
+                        context.contentResolver.delete(uri, null, null)
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                    localAssetDao.deleteByUri(asset.uri)
+                }
+            }
+
+            downloadDao.deleteTasksByTrackId(trackId)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
 }

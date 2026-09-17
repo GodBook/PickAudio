@@ -164,13 +164,14 @@ class PlaybackCoordinator(
 
     fun setPlaybackMode(mode: PlaybackMode) {
         _playbackMode.value = mode
+        player.repeatMode = if (mode == PlaybackMode.SINGLE_LOOP) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
         if (mode == PlaybackMode.SHUFFLE) {
             resetShufflePool()
         }
         saveSnapshot()
     }
 
-    fun togglePlaybackMode() {
+    fun togglePlaybackMode(): PlaybackMode {
         val next = when (_playbackMode.value) {
             PlaybackMode.SEQUENTIAL -> PlaybackMode.LIST_LOOP
             PlaybackMode.LIST_LOOP -> PlaybackMode.SINGLE_LOOP
@@ -178,6 +179,7 @@ class PlaybackCoordinator(
             PlaybackMode.SHUFFLE -> PlaybackMode.SEQUENTIAL
         }
         setPlaybackMode(next)
+        return next
     }
 
     private fun resetShufflePool() {

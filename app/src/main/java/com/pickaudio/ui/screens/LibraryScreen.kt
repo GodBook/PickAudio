@@ -6,12 +6,18 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.PlaylistAddCheck
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,9 +31,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
+import com.pickaudio.data.db.PickAudioDatabase
 import com.pickaudio.data.model.Track
 import com.pickaudio.data.repository.LibraryRepository
 import com.pickaudio.data.repository.PlaylistRepository
+import com.pickaudio.download.DownloadCoordinator
 import com.pickaudio.playback.PlaybackCoordinator
 import kotlinx.coroutines.launch
 
@@ -37,6 +45,7 @@ fun LibraryScreen(
     libraryRepository: LibraryRepository,
     playlistRepository: PlaylistRepository,
     playbackCoordinator: PlaybackCoordinator,
+    downloadCoordinator: DownloadCoordinator? = null,
     onNavigateToPlaylistDetail: (String) -> Unit,
     onNavigateToDownload: () -> Unit,
     onNavigateToSettings: () -> Unit,
@@ -50,9 +59,11 @@ fun LibraryScreen(
         if (searchQuery.isBlank()) libraryRepository.getAllTracks() else libraryRepository.searchTracks(searchQuery)
     }
     val tracks by tracksFlow.collectAsState(initial = emptyList())
+    val allPlaylists by playlistRepository.getAllPlaylists().collectAsState(initial = emptyList())
 
     var trackToDelete by remember { mutableStateOf<Track?>(null) }
     var deleteLocalFile by remember { mutableStateOf(false) }
+    var trackForPlaylist by remember { mutableStateOf<Track?>(null) }
 
     // SAF Pickers
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -216,6 +227,19 @@ fun LibraryScreen(
                             onToggleFavorite = {
                                 scope.launch { playlistRepository.toggleFavorite(track.id) }
                             },
+                            onAddToPlaylist = {
+                                trackForPlaylist = track
+                            },
+                            onDeleteDownload = if (downloadCoordinator != null && track.isAvailable) {
+                                {
+                                    scope.launch {
+                                        val ok = downloadCoordinator.deleteDownloadForTrack(track.id)
+                                        if (ok) {
+                                            Toast.makeText(context, "已删除本地下载", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            } else null,
                             onDelete = {
                                 trackToDelete = track
                                 deleteLocalFile = false
@@ -298,8 +322,49 @@ fun LibraryScreen(
             }
         )
     }
+
+    // Add to playlist dialog
+    if (trackForPlaylist != null) {
+        val t = trackForPlaylist!!
+        AlertDialog(
+            onDismissRequest = { trackForPlaylist = null },
+            title = { Text("加入歌单") },
+            text = {
+                if (allPlaylists.isEmpty()) {
+                    Text("暂无歌单")
+                } else {
+                    LazyColumn(modifier = Modifier.heightIn(max = 260.dp)) {
+                        items(allPlaylists) { pl ->
+                            ListItem(
+                                leadingContent = {
+                                    Icon(
+                                        imageVector = if (pl.id == PickAudioDatabase.FAVORITE_PLAYLIST_ID) Icons.Default.Favorite else Icons.AutoMirrored.Filled.QueueMusic,
+                                        contentDescription = null,
+                                        tint = if (pl.id == PickAudioDatabase.FAVORITE_PLAYLIST_ID) Color(0xFFFF4081) else MaterialTheme.colorScheme.primary
+                                    )
+                                },
+                                headlineContent = { Text(pl.name) },
+                                modifier = Modifier.clickable {
+                                    scope.launch {
+                                        playlistRepository.addTrackToPlaylist(pl.id, t.id)
+                                        Toast.makeText(context, "已加入歌单「${pl.name}」", Toast.LENGTH_SHORT).show()
+                                    }
+                                    trackForPlaylist = null
+                                }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { trackForPlaylist = null }) { Text("取消") }
+            }
+        )
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TrackRowItem(
     track: Track,
@@ -307,6 +372,8 @@ fun TrackRowItem(
     onPlayNext: () -> Unit,
     onAddToQueue: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+    onDeleteDownload: (() -> Unit)? = null,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -381,7 +448,7 @@ fun TrackRowItem(
                                 onPlayNext()
                                 showMenu = false
                             },
-                            leadingIcon = { Icon(Icons.Default.QueueMusic, contentDescription = null) }
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null) }
                         )
                         DropdownMenuItem(
                             text = { Text("添加到队尾") },
@@ -389,8 +456,26 @@ fun TrackRowItem(
                                 onAddToQueue()
                                 showMenu = false
                             },
-                            leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) }
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) }
                         )
+                        DropdownMenuItem(
+                            text = { Text("加入歌单") },
+                            onClick = {
+                                showMenu = false
+                                onAddToPlaylist()
+                            },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAddCheck, contentDescription = null) }
+                        )
+                        if (onDeleteDownload != null) {
+                            DropdownMenuItem(
+                                text = { Text("删除下载") },
+                                onClick = {
+                                    showMenu = false
+                                    onDeleteDownload()
+                                },
+                                leadingIcon = { Icon(Icons.Default.DeleteOutline, contentDescription = null) }
+                            )
+                        }
                         HorizontalDivider()
                         DropdownMenuItem(
                             text = { Text("删除", color = MaterialTheme.colorScheme.error) },
@@ -410,6 +495,9 @@ fun TrackRowItem(
                 }
             }
         },
-        modifier = modifier.clickable { onClick() }
+        modifier = modifier.combinedClickable(
+            onClick = { onClick() },
+            onLongClick = { showMenu = true }
+        )
     )
 }

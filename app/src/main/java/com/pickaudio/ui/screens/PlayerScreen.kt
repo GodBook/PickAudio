@@ -1,5 +1,6 @@
 package com.pickaudio.ui.screens
 
+import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,6 +18,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -43,6 +45,7 @@ fun PlayerScreen(
     isFavorite: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val currentTrack by coordinator.currentTrack.collectAsState()
     val isPlaying by coordinator.isPlaying.collectAsState()
     val progressMs by coordinator.currentPositionMs.collectAsState()
@@ -55,6 +58,7 @@ fun PlayerScreen(
     var showLyrics by remember { mutableStateOf(false) }
     var showQueueSheet by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
 
     var lyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var lyricOffsetMs by remember { mutableStateOf(0L) }
@@ -117,6 +121,56 @@ fun PlayerScreen(
                             contentDescription = "睡眠定时",
                             tint = if (sleepRemainingMs != null || coordinator.stopAfterCurrentTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                         )
+                    }
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "更多选项")
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("单曲循环") },
+                                onClick = {
+                                    coordinator.setPlaybackMode(PlaybackMode.SINGLE_LOOP)
+                                    showMenu = false
+                                    Toast.makeText(context, "已设为：单曲循环", Toast.LENGTH_SHORT).show()
+                                },
+                                leadingIcon = { Icon(Icons.Default.RepeatOne, contentDescription = null) },
+                                trailingIcon = { if (mode == PlaybackMode.SINGLE_LOOP) Icon(Icons.Default.Check, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("列表循环") },
+                                onClick = {
+                                    coordinator.setPlaybackMode(PlaybackMode.LIST_LOOP)
+                                    showMenu = false
+                                    Toast.makeText(context, "已设为：列表循环", Toast.LENGTH_SHORT).show()
+                                },
+                                leadingIcon = { Icon(Icons.Default.Repeat, contentDescription = null) },
+                                trailingIcon = { if (mode == PlaybackMode.LIST_LOOP) Icon(Icons.Default.Check, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("随机播放") },
+                                onClick = {
+                                    coordinator.setPlaybackMode(PlaybackMode.SHUFFLE)
+                                    showMenu = false
+                                    Toast.makeText(context, "已设为：随机播放", Toast.LENGTH_SHORT).show()
+                                },
+                                leadingIcon = { Icon(Icons.Default.Shuffle, contentDescription = null) },
+                                trailingIcon = { if (mode == PlaybackMode.SHUFFLE) Icon(Icons.Default.Check, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("顺序播放") },
+                                onClick = {
+                                    coordinator.setPlaybackMode(PlaybackMode.SEQUENTIAL)
+                                    showMenu = false
+                                    Toast.makeText(context, "已设为：顺序播放", Toast.LENGTH_SHORT).show()
+                                },
+                                leadingIcon = { Icon(Icons.Default.FormatListNumbered, contentDescription = null) },
+                                trailingIcon = { if (mode == PlaybackMode.SEQUENTIAL) Icon(Icons.Default.Check, contentDescription = null) }
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
@@ -264,7 +318,12 @@ fun PlayerScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Playback Mode Icon
-                IconButton(onClick = { coordinator.togglePlaybackMode() }) {
+                IconButton(
+                    onClick = {
+                        val newMode = coordinator.togglePlaybackMode()
+                        Toast.makeText(context, "播放模式：${newMode.displayName}", Toast.LENGTH_SHORT).show()
+                    }
+                ) {
                     val icon = when (mode) {
                         PlaybackMode.SEQUENTIAL -> Icons.Default.FormatListNumbered
                         PlaybackMode.LIST_LOOP -> Icons.Default.Repeat

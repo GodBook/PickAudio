@@ -10,6 +10,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -119,7 +120,7 @@ fun MainApp(app: PickAudioApplication) {
                                 currentRoute = Screen.Playlists.route
                                 navController.navigate(Screen.Playlists.route)
                             },
-                            icon = { Icon(Icons.Default.QueueMusic, contentDescription = "歌单") },
+                            icon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "歌单") },
                             label = { Text("歌单") }
                         )
                         NavigationBarItem(
@@ -148,6 +149,7 @@ fun MainApp(app: PickAudioApplication) {
                         libraryRepository = app.libraryRepository,
                         playlistRepository = app.playlistRepository,
                         playbackCoordinator = coordinator,
+                        downloadCoordinator = app.downloadCoordinator,
                         onNavigateToPlaylistDetail = { id ->
                             navController.navigate(Screen.PlaylistDetail.createRoute(id, "歌单"))
                         },
@@ -216,6 +218,7 @@ fun MainApp(app: PickAudioApplication) {
                         playlistName = name,
                         playlistRepository = app.playlistRepository,
                         playbackCoordinator = coordinator,
+                        downloadCoordinator = app.downloadCoordinator,
                         onBack = { navController.popBackStack() }
                     )
                 }

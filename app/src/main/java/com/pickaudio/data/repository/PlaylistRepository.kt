@@ -115,6 +115,10 @@ class PlaylistRepository(private val database: PickAudioDatabase) {
     }
 
     suspend fun addTrackToPlaylist(playlistId: String, trackId: String) {
+        if (playlistId == PickAudioDatabase.FAVORITE_PLAYLIST_ID) {
+            favoriteDao.addFavorite(FavoriteEntity(trackId = trackId))
+            return
+        }
         val maxOrder = playlistDao.getMaxSortOrder(playlistId) ?: -1
         playlistDao.addTrackToPlaylist(
             PlaylistTrackEntity(
@@ -126,6 +130,10 @@ class PlaylistRepository(private val database: PickAudioDatabase) {
     }
 
     suspend fun removeTrackFromPlaylist(playlistId: String, trackId: String) {
+        if (playlistId == PickAudioDatabase.FAVORITE_PLAYLIST_ID) {
+            favoriteDao.removeFavorite(trackId)
+            return
+        }
         playlistDao.removeTrackFromPlaylist(playlistId, trackId)
     }
 

@@ -1,7 +1,9 @@
 package com.pickaudio.ui.screens
 
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -11,9 +13,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.PlaylistAddCheck
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.graphics.Color
+import com.pickaudio.data.db.PickAudioDatabase
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,7 +47,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SearchScreen(
     userPreferences: UserPreferences,
@@ -309,6 +316,80 @@ fun SearchScreen(
                                         leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) }
                                     )
                                     DropdownMenuItem(
+                                        text = { Text("下一首播放") },
+                                        onClick = {
+                                            showMenu = false
+                                            val trackId = "online_${item.platform}_${item.songId}"
+                                            val track = com.pickaudio.data.model.Track(
+                                                id = trackId,
+                                                title = item.title,
+                                                artist = item.artist,
+                                                album = item.album,
+                                                durationMs = item.durationMs,
+                                                coverUri = item.coverUrl,
+                                                platform = item.platform,
+                                                platformSongId = item.songId
+                                            )
+                                            playbackCoordinator.playNext(track)
+                                            Toast.makeText(context, "已添加到下一首播放", Toast.LENGTH_SHORT).show()
+                                        },
+                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("添加到队尾") },
+                                        onClick = {
+                                            showMenu = false
+                                            val trackId = "online_${item.platform}_${item.songId}"
+                                            val track = com.pickaudio.data.model.Track(
+                                                id = trackId,
+                                                title = item.title,
+                                                artist = item.artist,
+                                                album = item.album,
+                                                durationMs = item.durationMs,
+                                                coverUri = item.coverUrl,
+                                                platform = item.platform,
+                                                platformSongId = item.songId
+                                            )
+                                            playbackCoordinator.addToQueue(track)
+                                            Toast.makeText(context, "已添加到播放队列队尾", Toast.LENGTH_SHORT).show()
+                                        },
+                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("加入「我喜欢」") },
+                                        onClick = {
+                                            showMenu = false
+                                            scope.launch {
+                                                try {
+                                                    val trackId = "online_${item.platform}_${item.songId}"
+                                                    val track = com.pickaudio.data.model.Track(
+                                                        id = trackId,
+                                                        title = item.title,
+                                                        artist = item.artist,
+                                                        album = item.album,
+                                                        durationMs = item.durationMs,
+                                                        coverUri = item.coverUrl,
+                                                        platform = item.platform,
+                                                        platformSongId = item.songId
+                                                    )
+                                                    playlistRepository.ensureTrackAndAddToPlaylist(PickAudioDatabase.FAVORITE_PLAYLIST_ID, track)
+                                                    Toast.makeText(context, "已添加到「我喜欢」", Toast.LENGTH_SHORT).show()
+                                                } catch (e: Exception) {
+                                                    Toast.makeText(context, "添加失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        },
+                                        leadingIcon = { Icon(Icons.Default.Favorite, contentDescription = null, tint = Color(0xFFFF4081)) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("加入歌单") },
+                                        onClick = {
+                                            showMenu = false
+                                            songForPlaylist = item
+                                        },
+                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAddCheck, contentDescription = null) }
+                                    )
+                                    DropdownMenuItem(
                                         text = { Text("下载") },
                                         onClick = {
                                             showMenu = false
@@ -317,19 +398,30 @@ fun SearchScreen(
                                         leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) }
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("加入歌单") },
+                                        text = { Text("删除下载") },
                                         onClick = {
                                             showMenu = false
-                                            songForPlaylist = item
+                                            scope.launch {
+                                                val trackId = "online_${item.platform}_${item.songId}"
+                                                val ok = downloadCoordinator.deleteDownloadForTrack(trackId)
+                                                if (ok) {
+                                                    Toast.makeText(context, "已删除本地下载", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(context, "暂无本地下载文件", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
                                         },
-                                        leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) }
+                                        leadingIcon = { Icon(Icons.Default.DeleteOutline, contentDescription = null) }
                                     )
                                 }
                             }
                         },
-                        modifier = Modifier.clickable {
-                            playOnlineTrack(item, playbackCoordinator, { showNoSourceDialog = true })
-                        }
+                        modifier = Modifier.combinedClickable(
+                            onClick = {
+                                playOnlineTrack(item, playbackCoordinator, { showNoSourceDialog = true })
+                            },
+                            onLongClick = { showMenu = true }
+                        )
                     )
                 }
             }
@@ -388,13 +480,20 @@ fun SearchScreen(
             onDismissRequest = { songForPlaylist = null },
             title = { Text("加入歌单") },
             text = {
-                val userPlaylists = playlists.filter { !it.isSystem }
+                val userPlaylists = playlists
                 if (userPlaylists.isEmpty()) {
-                    Text("暂无自建歌单，请先创建歌单")
+                    Text("暂无歌单")
                 } else {
                     LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
                         items(userPlaylists) { pl ->
                             ListItem(
+                                leadingContent = {
+                                    Icon(
+                                        imageVector = if (pl.id == PickAudioDatabase.FAVORITE_PLAYLIST_ID) Icons.Default.Favorite else Icons.AutoMirrored.Filled.QueueMusic,
+                                        contentDescription = null,
+                                        tint = if (pl.id == PickAudioDatabase.FAVORITE_PLAYLIST_ID) Color(0xFFFF4081) else MaterialTheme.colorScheme.primary
+                                    )
+                                },
                                 headlineContent = { Text(pl.name) },
                                 modifier = Modifier.clickable {
                                     scope.launch {
@@ -411,7 +510,7 @@ fun SearchScreen(
                                                 platformSongId = s.songId
                                             )
                                             playlistRepository.ensureTrackAndAddToPlaylist(pl.id, track)
-                                            Toast.makeText(context, "已添加到歌单「${pl.name}」", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, "已添加到「${pl.name}」", Toast.LENGTH_SHORT).show()
                                         } catch (e: Exception) {
                                             Toast.makeText(context, "添加失败: ${e.message}", Toast.LENGTH_SHORT).show()
                                         }
