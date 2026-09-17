@@ -83,6 +83,37 @@ class PlaylistRepository(private val database: PickAudioDatabase) {
         playlistDao.deletePlaylist(playlistId)
     }
 
+    suspend fun ensureTrackAndAddToPlaylist(playlistId: String, track: Track) {
+        if (trackDao.getTrackById(track.id) == null) {
+            trackDao.insertOrUpdate(
+                TrackEntity(
+                    id = track.id,
+                    title = track.title,
+                    artist = track.artist,
+                    album = track.album,
+                    durationMs = track.durationMs,
+                    coverUri = track.coverUri,
+                    trackNumber = track.trackNumber
+                )
+            )
+        }
+        val platform = track.platform ?: if (track.id.startsWith("online_wy_")) "wy" else if (track.id.startsWith("online_tx_")) "tx" else null
+        val songId = track.platformSongId ?: track.id.removePrefix("online_wy_").removePrefix("online_tx_")
+        if (platform != null && songId.isNotEmpty()) {
+            if (database.onlineRefDao().getByTrackId(track.id) == null) {
+                database.onlineRefDao().insertOrUpdate(
+                    OnlineRefEntity(
+                        trackId = track.id,
+                        platform = platform,
+                        platformSongId = songId,
+                        platformMetadataJson = "{}"
+                    )
+                )
+            }
+        }
+        addTrackToPlaylist(playlistId, track.id)
+    }
+
     suspend fun addTrackToPlaylist(playlistId: String, trackId: String) {
         val maxOrder = playlistDao.getMaxSortOrder(playlistId) ?: -1
         playlistDao.addTrackToPlaylist(
@@ -99,6 +130,9 @@ class PlaylistRepository(private val database: PickAudioDatabase) {
     }
 
     suspend fun toggleFavorite(trackId: String): Boolean {
+        if (trackDao.getTrackById(trackId) == null) {
+            return false
+        }
         val isFav = favoriteDao.isFavoriteSync(trackId)
         return if (isFav) {
             favoriteDao.removeFavorite(trackId)

@@ -144,7 +144,7 @@ class DownloadCoordinator(
         try {
             // 1. Resolve URL
             downloadDao.updateStatus(taskId, DownloadStatus.RESOLVING.name)
-            val downloadUrl = sourceManager.resolveMusicUrl(task.platform, task.platformSongId, task.targetQuality)
+            val downloadUrl = sourceManager.resolveMusicUrl(task.platform, task.platformSongId, task.targetQuality, task.title, task.artist)
             if (downloadUrl.isBlank()) {
                 throw IllegalStateException("解析下载地址为空")
             }

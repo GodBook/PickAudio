@@ -55,6 +55,12 @@ class LxSourceManager(
     private val activeEngines = ConcurrentHashMap<String, QuickJsEngine>()
     private val sourceCapabilities = ConcurrentHashMap<String, Map<String, SourcePlatformCapability>>()
 
+    init {
+        scope.launch(Dispatchers.IO) {
+            ensureBuiltinSources()
+        }
+    }
+
     fun getAllSources(): Flow<List<SourceScriptEntity>> = sourceDao.getAllSources()
     fun getPlatformSelections(): Flow<List<PlatformSourceSelectionEntity>> = sourceDao.getPlatformSelections()
 
@@ -309,41 +315,185 @@ class LxSourceManager(
         }
     }
 
-    suspend fun resolveMusicUrl(platform: String, songId: String, quality: String): String = withContext(Dispatchers.IO) {
+    suspend fun ensureBuiltinSources() = withContext(Dispatchers.IO) {
+        try {
+            val builtinId = "builtin_aggregate"
+            val existing = sourceDao.getSourceById(builtinId)
+            if (existing == null) {
+                val entity = SourceScriptEntity(
+                    id = builtinId,
+                    name = "拾音官方聚合音源",
+                    version = "1.1.0",
+                    author = "PickAudio Official",
+                    description = "内置多线路高品质聚合解析服务，支持网易云与QQ音乐在线高品质试听与下载",
+                    homepage = "https://github.com/GodBook/PickAudio",
+                    scriptHash = "builtin_aggregate_v110",
+                    scriptContent = "// PickAudio Built-in Multi-Engine Aggregator",
+                    capabilitiesJson = """{"wy":{"platform":"wy","name":"网易云","actions":["musicUrl"],"qualities":["128k","320k","flac"]},"tx":{"platform":"tx","name":"QQ音乐","actions":["musicUrl"],"qualities":["128k","320k","flac"]}}""",
+                    isEnabled = true
+                )
+                sourceDao.insertOrUpdate(entity)
+            }
+            val wySel = sourceDao.getSelectionForPlatform("wy")
+            if (wySel?.sourceId == null) {
+                selectSourceForPlatform("wy", builtinId)
+            }
+            val txSel = sourceDao.getSelectionForPlatform("tx")
+            if (txSel?.sourceId == null) {
+                selectSourceForPlatform("tx", builtinId)
+            }
+        } catch (e: Exception) {
+            Log.e("LxSourceManager", "ensureBuiltinSources error", e)
+        }
+    }
+
+    suspend fun resolveMusicUrl(
+        platform: String,
+        songId: String,
+        quality: String = "128k",
+        title: String? = null,
+        artist: String? = null
+    ): String = withContext(Dispatchers.IO) {
         val selection = sourceDao.getSelectionForPlatform(platform)
-            ?: throw IllegalStateException("平台 [$platform] 尚未配置或绑定音乐源")
-        val sourceId = selection.sourceId ?: throw IllegalStateException("未选定可用音乐源")
+        val sourceId = selection?.sourceId
 
-        val engine = getOrStartEngine(sourceId)
-        val musicInfo = JsonObject().apply {
-            addProperty("songmid", songId)
-            addProperty("id", songId)
-        }
-        val info = JsonObject().apply {
-            addProperty("type", quality)
-            add("musicInfo", musicInfo)
+        // If no source is selected or source is builtin_aggregate, use builtin resolver
+        if (sourceId == null || sourceId == "builtin_aggregate") {
+            return@withContext resolveBuiltinMusicUrl(platform, songId, quality, title, artist)
         }
 
-        val evalJs = """
-            (function() {
-                var handler = globalThis.__lx_handlers && globalThis.__lx_handlers.request;
-                if (!handler) return Promise.reject(new Error("源脚本未注册 request 处理器"));
-                return handler({
-                    source: "$platform",
-                    action: "musicUrl",
-                    info: ${info}
-                });
-            })()
-        """.trimIndent()
+        // Try custom LX script first
+        try {
+            val engine = getOrStartEngine(sourceId)
+            val musicInfo = JsonObject().apply {
+                addProperty("songmid", songId)
+                addProperty("id", songId)
+            }
+            val info = JsonObject().apply {
+                addProperty("type", quality)
+                add("musicInfo", musicInfo)
+            }
 
-        val resJson = engine.evaluate(evalJs, "<resolve>") ?: throw IllegalStateException("解析返回空值")
-        val parsed = JsonParser.parseString(resJson)
-        if (parsed.isJsonPrimitive) {
-            parsed.asString
-        } else if (parsed.isJsonObject && parsed.asJsonObject.has("url")) {
-            parsed.asJsonObject.get("url").asString
-        } else {
-            parsed.toString().trim('"')
+            val evalJs = """
+                (function() {
+                    var handler = globalThis.__lx_handlers && globalThis.__lx_handlers.request;
+                    if (!handler) return Promise.reject(new Error("源脚本未注册 request 处理器"));
+                    return handler({
+                        source: "$platform",
+                        action: "musicUrl",
+                        info: ${info}
+                    });
+                })()
+            """.trimIndent()
+
+            val resJson = engine.evaluate(evalJs, "<resolve>") ?: throw IllegalStateException("解析返回空值")
+            val parsed = JsonParser.parseString(resJson)
+            val url = if (parsed.isJsonPrimitive) {
+                parsed.asString
+            } else if (parsed.isJsonObject && parsed.asJsonObject.has("url")) {
+                parsed.asJsonObject.get("url").asString
+            } else {
+                parsed.toString().trim('"')
+            }
+            if (url.isNotBlank() && (url.startsWith("http://") || url.startsWith("https://"))) {
+                return@withContext url
+            }
+        } catch (e: Exception) {
+            Log.w("LxSourceManager", "Custom script resolve failed for $platform, fallback to built-in: ${e.message}")
         }
+
+        // Fallback to built-in aggregator
+        resolveBuiltinMusicUrl(platform, songId, quality, title, artist)
+    }
+
+    private suspend fun resolveBuiltinMusicUrl(
+        platform: String,
+        songId: String,
+        quality: String,
+        title: String?,
+        artist: String?
+    ): String {
+        if (platform == "wy") {
+            // Priority 1: GDStudio NetEase API (High Quality 320k / 128k)
+            try {
+                val br = if (quality == "flac" || quality == "320k") "320" else "128"
+                val req = Request.Builder()
+                    .url("https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id=$songId&br=$br")
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                    .build()
+                val resp = okHttpClient.newCall(req).execute()
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string() ?: ""
+                    val json = JsonParser.parseString(body).asJsonObject
+                    if (json.has("url")) {
+                        val u = json.get("url").asString
+                        if (u.isNotBlank() && u.startsWith("http")) {
+                            return u
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("LxSourceManager", "Builtin wy GDStudio failed: ${e.message}")
+            }
+
+            // Priority 2: Paugram API
+            try {
+                val req = Request.Builder()
+                    .url("https://api.paugram.com/netease/?id=$songId")
+                    .build()
+                val resp = okHttpClient.newCall(req).execute()
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string() ?: ""
+                    val json = JsonParser.parseString(body).asJsonObject
+                    if (json.has("link")) {
+                        val link = json.get("link").asString
+                        if (link.isNotBlank() && link.startsWith("http")) return link
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("LxSourceManager", "Builtin wy Paugram failed: ${e.message}")
+            }
+
+            // Priority 3: NetEase standard outer URL (HTTP 302 stream)
+            return "https://music.163.com/song/media/outer/url?id=$songId.mp3"
+        } else if (platform == "tx") {
+            // For QQ Music, cross-match NetEase database with song title and artist
+            var queryTitle = title
+            var queryArtist = artist
+            if (queryTitle.isNullOrBlank()) {
+                val dbTrack = database.trackDao().getTrackById("online_tx_$songId")
+                if (dbTrack != null) {
+                    queryTitle = dbTrack.title
+                    queryArtist = dbTrack.artist
+                }
+            }
+
+            if (!queryTitle.isNullOrBlank()) {
+                try {
+                    val searchKeyword = java.net.URLEncoder.encode("$queryTitle ${queryArtist ?: ""}".trim(), "UTF-8")
+                    val searchUrl = "https://music.163.com/api/search/get/web?csrf_token=&s=$searchKeyword&type=1&offset=0&total=true&limit=1"
+                    val searchReq = Request.Builder()
+                        .url(searchUrl)
+                        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                        .build()
+                    val resp = okHttpClient.newCall(searchReq).execute()
+                    if (resp.isSuccessful) {
+                        val body = resp.body?.string() ?: ""
+                        val root = JsonParser.parseString(body).asJsonObject
+                        val songs = root.getAsJsonObject("result")?.getAsJsonArray("songs")
+                        if (songs != null && songs.size() > 0) {
+                            val matchedSongId = songs[0].asJsonObject.get("id").asLong.toString()
+                            return resolveBuiltinMusicUrl("wy", matchedSongId, quality, queryTitle, queryArtist)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w("LxSourceManager", "Builtin tx cross-match failed: ${e.message}")
+                }
+            }
+
+            throw IllegalStateException("未找到该 QQ 歌曲的可用播放链接，请在音乐源管理中导入专用音源")
+        }
+
+        throw IllegalStateException("不支持的平台: $platform")
     }
 }

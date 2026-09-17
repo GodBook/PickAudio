@@ -2,6 +2,8 @@ package com.pickaudio.playback
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
+import android.widget.Toast
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -9,9 +11,11 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.pickaudio.data.db.OnlineRefEntity
 import com.pickaudio.data.db.PickAudioDatabase
 import com.pickaudio.data.db.PlaybackSnapshotEntity
 import com.pickaudio.data.db.QueueEntryEntity
+import com.pickaudio.data.db.TrackEntity
 import com.pickaudio.data.model.PlaybackMode
 import com.pickaudio.data.model.Track
 import com.pickaudio.source.LxSourceManager
@@ -81,6 +85,7 @@ class PlaybackCoordinator(
 
     // Periodic progress saver
     private var progressTickerJob: Job? = null
+    private var consecutiveFailures = 0
 
     init {
         restoreSnapshot()
@@ -98,6 +103,24 @@ class PlaybackCoordinator(
                 _durationMs.value = player.duration.coerceAtLeast(0L)
             } else if (state == Player.STATE_ENDED) {
                 handleTrackEnded()
+            }
+        }
+
+        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            Log.e("PlaybackCoordinator", "ExoPlayer playback error: ${error.errorCodeName}", error)
+            _isPlaying.value = false
+            consecutiveFailures++
+            scope.launch(Dispatchers.Main) {
+                Toast.makeText(context, "播放出错: ${error.message ?: "网络或音频解码异常"}", Toast.LENGTH_SHORT).show()
+            }
+            val q = _queue.value
+            if (q.size > 1 && consecutiveFailures < 3) {
+                scope.launch {
+                    delay(1000)
+                    next()
+                }
+            } else {
+                player.stop()
             }
         }
     }
@@ -150,6 +173,38 @@ class PlaybackCoordinator(
         shufflePool.addAll(list)
     }
 
+    private suspend fun ensureTracksPersisted(tracks: List<Track>) {
+        for (t in tracks) {
+            if (trackDao.getTrackById(t.id) == null) {
+                trackDao.insertOrUpdate(
+                    TrackEntity(
+                        id = t.id,
+                        title = t.title,
+                        artist = t.artist,
+                        album = t.album,
+                        durationMs = t.durationMs,
+                        coverUri = t.coverUri,
+                        trackNumber = t.trackNumber
+                    )
+                )
+            }
+            val platform = t.platform ?: if (t.id.startsWith("online_wy_")) "wy" else if (t.id.startsWith("online_tx_")) "tx" else null
+            val songId = t.platformSongId ?: t.id.removePrefix("online_wy_").removePrefix("online_tx_")
+            if (platform != null && songId.isNotEmpty()) {
+                if (database.onlineRefDao().getByTrackId(t.id) == null) {
+                    database.onlineRefDao().insertOrUpdate(
+                        OnlineRefEntity(
+                            trackId = t.id,
+                            platform = platform,
+                            platformSongId = songId,
+                            platformMetadataJson = "{}"
+                        )
+                    )
+                }
+            }
+        }
+    }
+
     fun setQueueAndPlay(tracks: List<Track>, startIndex: Int = 0) {
         if (tracks.isEmpty()) return
         _queue.value = tracks
@@ -160,11 +215,16 @@ class PlaybackCoordinator(
         playTrack(tracks[safeIndex])
 
         scope.launch(Dispatchers.IO) {
-            queueDao.clearQueue()
-            queueDao.insertQueueEntries(tracks.mapIndexed { idx, t ->
-                QueueEntryEntity(trackId = t.id, queueOrder = idx)
-            })
-            saveSnapshot()
+            try {
+                ensureTracksPersisted(tracks)
+                queueDao.clearQueue()
+                queueDao.insertQueueEntries(tracks.mapIndexed { idx, t ->
+                    QueueEntryEntity(trackId = t.id, queueOrder = idx)
+                })
+                saveSnapshot()
+            } catch (e: Exception) {
+                Log.e("PlaybackCoordinator", "Error setting queue in DB", e)
+            }
         }
     }
 
@@ -178,7 +238,14 @@ class PlaybackCoordinator(
         }
         _queue.value = currentList
         resetShufflePool()
-        saveSnapshot()
+        scope.launch(Dispatchers.IO) {
+            try {
+                ensureTracksPersisted(listOf(track))
+                saveSnapshot()
+            } catch (e: Exception) {
+                Log.e("PlaybackCoordinator", "playNext db error", e)
+            }
+        }
     }
 
     fun addToQueue(track: Track) {
@@ -186,7 +253,14 @@ class PlaybackCoordinator(
         currentList.add(track)
         _queue.value = currentList
         resetShufflePool()
-        saveSnapshot()
+        scope.launch(Dispatchers.IO) {
+            try {
+                ensureTracksPersisted(listOf(track))
+                saveSnapshot()
+            } catch (e: Exception) {
+                Log.e("PlaybackCoordinator", "addToQueue db error", e)
+            }
+        }
     }
 
     fun removeQueueItem(index: Int) {
@@ -357,10 +431,21 @@ class PlaybackCoordinator(
                 player.setMediaItem(mediaItem)
                 player.prepare()
                 player.play()
+                consecutiveFailures = 0
             } catch (e: Exception) {
-                // Skip to next on failure after logging
-                delay(1000)
-                next()
+                Log.e("PlaybackCoordinator", "Failed to play track: ${track.title}", e)
+                consecutiveFailures++
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "播放失败: 无法获取音频播放地址 (${track.title})", Toast.LENGTH_SHORT).show()
+                }
+                val q = _queue.value
+                if (q.size > 1 && consecutiveFailures < 3) {
+                    delay(1000)
+                    next()
+                } else {
+                    _isPlaying.value = false
+                    player.stop()
+                }
             }
         }
         saveSnapshot()
@@ -375,9 +460,15 @@ class PlaybackCoordinator(
         }
 
         // 2. Check online ref and resolve
-        val ref = database.onlineRefDao().getByTrackId(track.id)
-        if (ref != null) {
-            val url = sourceManager.resolveMusicUrl(ref.platform, ref.platformSongId, "128k")
+        val platform = track.platform
+            ?: database.onlineRefDao().getByTrackId(track.id)?.platform
+            ?: if (track.id.startsWith("online_wy_")) "wy" else if (track.id.startsWith("online_tx_")) "tx" else null
+        val songId = track.platformSongId
+            ?: database.onlineRefDao().getByTrackId(track.id)?.platformSongId
+            ?: track.id.removePrefix("online_wy_").removePrefix("online_tx_")
+
+        if (platform != null && songId.isNotBlank()) {
+            val url = sourceManager.resolveMusicUrl(platform, songId, "320k", track.title, track.artist)
             return@withContext Uri.parse(url)
         }
 

@@ -23,5 +23,7 @@ class PickAudioApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Eagerly initialize built-in music sources and selections
+        sourceManager
     }
 }

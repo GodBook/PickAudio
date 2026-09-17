@@ -398,9 +398,23 @@ fun SearchScreen(
                                 headlineContent = { Text(pl.name) },
                                 modifier = Modifier.clickable {
                                     scope.launch {
-                                        val trackId = "online_${s.platform}_${s.songId}"
-                                        playlistRepository.addTrackToPlaylist(pl.id, trackId)
-                                        Toast.makeText(context, "已添加到歌单「${pl.name}」", Toast.LENGTH_SHORT).show()
+                                        try {
+                                            val trackId = "online_${s.platform}_${s.songId}"
+                                            val track = com.pickaudio.data.model.Track(
+                                                id = trackId,
+                                                title = s.title,
+                                                artist = s.artist,
+                                                album = s.album,
+                                                durationMs = s.durationMs,
+                                                coverUri = s.coverUrl,
+                                                platform = s.platform,
+                                                platformSongId = s.songId
+                                            )
+                                            playlistRepository.ensureTrackAndAddToPlaylist(pl.id, track)
+                                            Toast.makeText(context, "已添加到歌单「${pl.name}」", Toast.LENGTH_SHORT).show()
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "添加失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
                                     songForPlaylist = null
                                 }
