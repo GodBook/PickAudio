@@ -1,0 +1,9 @@
+{
+  "versionCode": 1,
+  "versionName": "1.0.0",
+  "changelog": "1. 拾音 PickAudio 1.0.0 首发版本发布\n2. 支持本地音频扫描与 SAF 目录持久化授权导入\n3. 支持 Media3 ExoPlayer 4 种播放模式与后台保活\n4. 支持内置网易云、QQ 音乐在线搜索与逐行双语同步歌词\n5. 支持 LX 移动端自定义音源脚本解析\n6. 支持 Android 16 16KB 内存分页对齐规范\n7. 支持公共媒体目录 Music/PickAudio 断点续传下载\n8. 支持歌单管理、睡眠定时与 ZIP 格式数据备份恢复\n9. 支持应用内一键检查更新与安装",
+  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.0.0/PickAudio-v1.0.0-release.apk",
+  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.0.0",
+  "apkSize": 53506200,
+  "publishTime": "2026-09-17"
+}

@@ -1,0 +1,489 @@
+package com.pickaudio.playback
+
+import android.content.Context
+import android.net.Uri
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import com.pickaudio.data.db.PickAudioDatabase
+import com.pickaudio.data.db.PlaybackSnapshotEntity
+import com.pickaudio.data.db.QueueEntryEntity
+import com.pickaudio.data.model.PlaybackMode
+import com.pickaudio.data.model.Track
+import com.pickaudio.source.LxSourceManager
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import java.util.*
+
+class PlaybackCoordinator(
+    private val context: Context,
+    private val database: PickAudioDatabase,
+    private val sourceManager: LxSourceManager
+) {
+    private val playbackDao = database.playbackDao()
+    private val queueDao = database.queueDao()
+    private val trackDao = database.trackDao()
+    private val localAssetDao = database.localAssetDao()
+    private val favoriteDao = database.favoriteDao()
+
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val gson = Gson()
+
+    val player: ExoPlayer by lazy {
+        ExoPlayer.Builder(context).build().apply {
+            setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .setUsage(C.USAGE_MEDIA)
+                    .build(),
+                true // handle audio focus automatically
+            )
+            addListener(playerListener)
+        }
+    }
+
+    private val _currentTrack = MutableStateFlow<Track?>(null)
+    val currentTrack: StateFlow<Track?> = _currentTrack.asStateFlow()
+
+    private val _isPlaying = MutableStateFlow(false)
+    val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
+
+    private val _currentPositionMs = MutableStateFlow(0L)
+    val currentPositionMs: StateFlow<Long> = _currentPositionMs.asStateFlow()
+
+    private val _durationMs = MutableStateFlow(0L)
+    val durationMs: StateFlow<Long> = _durationMs.asStateFlow()
+
+    private val _playbackMode = MutableStateFlow(PlaybackMode.SEQUENTIAL)
+    val playbackMode: StateFlow<PlaybackMode> = _playbackMode.asStateFlow()
+
+    private val _queue = MutableStateFlow<List<Track>>(emptyList())
+    val queue: StateFlow<List<Track>> = _queue.asStateFlow()
+
+    private val _currentIndex = MutableStateFlow(-1)
+    val currentIndex: StateFlow<Int> = _currentIndex.asStateFlow()
+
+    // Sleep Timer
+    private val _sleepTimerRemainingMs = MutableStateFlow<Long?>(null)
+    val sleepTimerRemainingMs: StateFlow<Long?> = _sleepTimerRemainingMs.asStateFlow()
+    private var sleepTimerJob: Job? = null
+    var stopAfterCurrentTrack = false
+
+    // Shuffle history and round tracking
+    private val shuffleHistory = Stack<Int>()
+    private val shufflePool = mutableListOf<Int>()
+
+    // Periodic progress saver
+    private var progressTickerJob: Job? = null
+
+    init {
+        restoreSnapshot()
+        startProgressTicker()
+    }
+
+    private val playerListener = object : Player.Listener {
+        override fun onIsPlayingChanged(playing: Boolean) {
+            _isPlaying.value = playing
+            saveSnapshot()
+        }
+
+        override fun onPlaybackStateChanged(state: Int) {
+            if (state == Player.STATE_READY) {
+                _durationMs.value = player.duration.coerceAtLeast(0L)
+            } else if (state == Player.STATE_ENDED) {
+                handleTrackEnded()
+            }
+        }
+    }
+
+    private fun startProgressTicker() {
+        progressTickerJob?.cancel()
+        progressTickerJob = scope.launch {
+            while (isActive) {
+                if (_isPlaying.value) {
+                    _currentPositionMs.value = player.currentPosition.coerceAtLeast(0L)
+                    _durationMs.value = player.duration.coerceAtLeast(0L)
+                }
+                delay(500)
+            }
+        }
+
+        // Periodic snapshot saver every 5s
+        scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(5000)
+                if (_isPlaying.value) {
+                    saveSnapshot()
+                }
+            }
+        }
+    }
+
+    fun setPlaybackMode(mode: PlaybackMode) {
+        _playbackMode.value = mode
+        if (mode == PlaybackMode.SHUFFLE) {
+            resetShufflePool()
+        }
+        saveSnapshot()
+    }
+
+    fun togglePlaybackMode() {
+        val next = when (_playbackMode.value) {
+            PlaybackMode.SEQUENTIAL -> PlaybackMode.LIST_LOOP
+            PlaybackMode.LIST_LOOP -> PlaybackMode.SINGLE_LOOP
+            PlaybackMode.SINGLE_LOOP -> PlaybackMode.SHUFFLE
+            PlaybackMode.SHUFFLE -> PlaybackMode.SEQUENTIAL
+        }
+        setPlaybackMode(next)
+    }
+
+    private fun resetShufflePool() {
+        shufflePool.clear()
+        val cur = _currentIndex.value
+        val list = _queue.value.indices.filter { it != cur }.shuffled().toMutableList()
+        shufflePool.addAll(list)
+    }
+
+    fun setQueueAndPlay(tracks: List<Track>, startIndex: Int = 0) {
+        if (tracks.isEmpty()) return
+        _queue.value = tracks
+        val safeIndex = startIndex.coerceIn(0, tracks.size - 1)
+        _currentIndex.value = safeIndex
+        shuffleHistory.clear()
+        resetShufflePool()
+        playTrack(tracks[safeIndex])
+
+        scope.launch(Dispatchers.IO) {
+            queueDao.clearQueue()
+            queueDao.insertQueueEntries(tracks.mapIndexed { idx, t ->
+                QueueEntryEntity(trackId = t.id, queueOrder = idx)
+            })
+            saveSnapshot()
+        }
+    }
+
+    fun playNext(track: Track) {
+        val currentList = _queue.value.toMutableList()
+        val cur = _currentIndex.value
+        if (cur >= 0 && cur < currentList.size) {
+            currentList.add(cur + 1, track)
+        } else {
+            currentList.add(track)
+        }
+        _queue.value = currentList
+        resetShufflePool()
+        saveSnapshot()
+    }
+
+    fun addToQueue(track: Track) {
+        val currentList = _queue.value.toMutableList()
+        currentList.add(track)
+        _queue.value = currentList
+        resetShufflePool()
+        saveSnapshot()
+    }
+
+    fun removeQueueItem(index: Int) {
+        val currentList = _queue.value.toMutableList()
+        if (index !in currentList.indices) return
+        val cur = _currentIndex.value
+        currentList.removeAt(index)
+        _queue.value = currentList
+
+        if (currentList.isEmpty()) {
+            player.stop()
+            _currentTrack.value = null
+            _currentIndex.value = -1
+        } else if (index == cur) {
+            val nextIndex = if (index < currentList.size) index else 0
+            _currentIndex.value = nextIndex
+            playTrack(currentList[nextIndex])
+        } else if (index < cur) {
+            _currentIndex.value = cur - 1
+        }
+        resetShufflePool()
+        saveSnapshot()
+    }
+
+    fun clearQueue() {
+        player.stop()
+        _queue.value = emptyList()
+        _currentIndex.value = -1
+        _currentTrack.value = null
+        shuffleHistory.clear()
+        scope.launch(Dispatchers.IO) {
+            queueDao.clearQueue()
+            saveSnapshot()
+        }
+    }
+
+    fun playOrPause() {
+        if (player.isPlaying) {
+            player.pause()
+        } else {
+            if (_currentTrack.value == null && _queue.value.isNotEmpty()) {
+                val idx = if (_currentIndex.value in _queue.value.indices) _currentIndex.value else 0
+                _currentIndex.value = idx
+                playTrack(_queue.value[idx])
+            } else {
+                player.play()
+            }
+        }
+        saveSnapshot()
+    }
+
+    fun seekTo(positionMs: Long) {
+        player.seekTo(positionMs)
+        _currentPositionMs.value = positionMs
+        saveSnapshot()
+    }
+
+    fun previous() {
+        // Smart Previous Rule: if progress > 3s, seek to 0. Else jump previous.
+        if (player.currentPosition > 3000L) {
+            player.seekTo(0L)
+            _currentPositionMs.value = 0L
+            return
+        }
+
+        val q = _queue.value
+        if (q.isEmpty()) return
+
+        if (_playbackMode.value == PlaybackMode.SHUFFLE) {
+            if (shuffleHistory.isNotEmpty()) {
+                val prevIndex = shuffleHistory.pop()
+                if (prevIndex in q.indices) {
+                    _currentIndex.value = prevIndex
+                    playTrack(q[prevIndex], isBackTracking = true)
+                    return
+                }
+            }
+        }
+
+        val cur = _currentIndex.value
+        val prevIndex = if (cur > 0) cur - 1 else q.size - 1
+        _currentIndex.value = prevIndex
+        playTrack(q[prevIndex])
+    }
+
+    fun next() {
+        val q = _queue.value
+        if (q.isEmpty()) return
+        val cur = _currentIndex.value
+
+        val nextIndex = when (_playbackMode.value) {
+            PlaybackMode.SHUFFLE -> getNextShuffleIndex()
+            else -> if (cur + 1 < q.size) cur + 1 else 0
+        }
+
+        if (nextIndex in q.indices) {
+            if (cur in q.indices) shuffleHistory.push(cur)
+            _currentIndex.value = nextIndex
+            playTrack(q[nextIndex])
+        }
+    }
+
+    private fun handleTrackEnded() {
+        if (stopAfterCurrentTrack) {
+            stopAfterCurrentTrack = false
+            player.pause()
+            return
+        }
+
+        val q = _queue.value
+        if (q.isEmpty()) return
+        val cur = _currentIndex.value
+
+        when (_playbackMode.value) {
+            PlaybackMode.SINGLE_LOOP -> {
+                // Natural end of track loops same track
+                player.seekTo(0L)
+                player.play()
+            }
+            PlaybackMode.SEQUENTIAL -> {
+                if (cur + 1 < q.size) {
+                    _currentIndex.value = cur + 1
+                    playTrack(q[cur + 1])
+                } else {
+                    // Sequential mode stops at the end of queue
+                    player.pause()
+                }
+            }
+            PlaybackMode.LIST_LOOP -> {
+                val nextIdx = (cur + 1) % q.size
+                _currentIndex.value = nextIdx
+                playTrack(q[nextIdx])
+            }
+            PlaybackMode.SHUFFLE -> {
+                val nextIdx = getNextShuffleIndex()
+                if (nextIdx in q.indices) {
+                    if (cur in q.indices) shuffleHistory.push(cur)
+                    _currentIndex.value = nextIdx
+                    playTrack(q[nextIdx])
+                }
+            }
+        }
+    }
+
+    private fun getNextShuffleIndex(): Int {
+        val q = _queue.value
+        if (q.isEmpty()) return -1
+        if (q.size == 1) return 0
+
+        if (shufflePool.isEmpty()) {
+            resetShufflePool()
+        }
+        return if (shufflePool.isNotEmpty()) shufflePool.removeAt(0) else 0
+    }
+
+    private fun playTrack(track: Track, isBackTracking: Boolean = false) {
+        _currentTrack.value = track
+        _currentPositionMs.value = 0L
+
+        scope.launch {
+            try {
+                val mediaUri = resolveTrackMediaUri(track)
+                val mediaItem = MediaItem.Builder()
+                    .setUri(mediaUri)
+                    .setMediaId(track.id)
+                    .build()
+
+                player.setMediaItem(mediaItem)
+                player.prepare()
+                player.play()
+            } catch (e: Exception) {
+                // Skip to next on failure after logging
+                delay(1000)
+                next()
+            }
+        }
+        saveSnapshot()
+    }
+
+    private suspend fun resolveTrackMediaUri(track: Track): Uri = withContext(Dispatchers.IO) {
+        // 1. Check local asset
+        val assets = localAssetDao.getAssetsForTrack(track.id)
+        val validLocal = assets.firstOrNull { it.isAvailable }
+        if (validLocal != null) {
+            return@withContext Uri.parse(validLocal.uri)
+        }
+
+        // 2. Check online ref and resolve
+        val ref = database.onlineRefDao().getByTrackId(track.id)
+        if (ref != null) {
+            val url = sourceManager.resolveMusicUrl(ref.platform, ref.platformSongId, "128k")
+            return@withContext Uri.parse(url)
+        }
+
+        // Fallback to track localUri if present
+        if (!track.localUri.isNullOrEmpty()) {
+            return@withContext Uri.parse(track.localUri)
+        }
+
+        throw IllegalStateException("无法解析播放地址: ${track.title}")
+    }
+
+    // Sleep Timer
+    fun setSleepTimer(minutes: Int) {
+        sleepTimerJob?.cancel()
+        if (minutes <= 0) {
+            _sleepTimerRemainingMs.value = null
+            return
+        }
+
+        val totalMs = minutes * 60 * 1000L
+        sleepTimerJob = scope.launch {
+            var remaining = totalMs
+            while (remaining > 0) {
+                _sleepTimerRemainingMs.value = remaining
+                delay(1000)
+                remaining -= 1000
+            }
+            _sleepTimerRemainingMs.value = null
+            player.pause()
+        }
+    }
+
+    fun cancelSleepTimer() {
+        sleepTimerJob?.cancel()
+        _sleepTimerRemainingMs.value = null
+        stopAfterCurrentTrack = false
+    }
+
+    private fun saveSnapshot() {
+        val curTrack = _currentTrack.value ?: return
+        val pos = player.currentPosition.coerceAtLeast(0L)
+        val mode = _playbackMode.value.name
+        val historyJson = gson.toJson(shuffleHistory.toList())
+
+        scope.launch(Dispatchers.IO) {
+            playbackDao.saveSnapshot(
+                PlaybackSnapshotEntity(
+                    id = 1,
+                    currentTrackId = curTrack.id,
+                    progressMs = pos,
+                    playbackMode = mode,
+                    shuffleHistoryJson = historyJson
+                )
+            )
+        }
+    }
+
+    private fun restoreSnapshot() {
+        scope.launch(Dispatchers.IO) {
+            val queueEntities = queueDao.getQueueTracksSync()
+            if (queueEntities.isNotEmpty()) {
+                val restoredTracks = queueEntities.map { entity ->
+                    val isFav = favoriteDao.isFavoriteSync(entity.id)
+                    val assets = localAssetDao.getAssetsForTrack(entity.id)
+                    val localUri = assets.firstOrNull { it.isAvailable }?.uri
+                    Track(
+                        id = entity.id,
+                        title = entity.title,
+                        artist = entity.artist,
+                        album = entity.album,
+                        durationMs = entity.durationMs,
+                        coverUri = entity.coverUri,
+                        trackNumber = entity.trackNumber,
+                        localUri = localUri,
+                        isAvailable = localUri != null,
+                        isFavorite = isFav
+                    )
+                }
+                _queue.value = restoredTracks
+
+                val snapshot = playbackDao.getSnapshot()
+                if (snapshot != null) {
+                    val mode = try { PlaybackMode.valueOf(snapshot.playbackMode) } catch (e: Exception) { PlaybackMode.SEQUENTIAL }
+                    _playbackMode.value = mode
+
+                    val idx = restoredTracks.indexOfFirst { it.id == snapshot.currentTrackId }
+                    if (idx >= 0) {
+                        _currentIndex.value = idx
+                        _currentTrack.value = restoredTracks[idx]
+                        _currentPositionMs.value = snapshot.progressMs
+
+                        // Prepare player at restored position but keep paused
+                        withContext(Dispatchers.Main) {
+                            try {
+                                val mediaUri = resolveTrackMediaUri(restoredTracks[idx])
+                                player.setMediaItem(MediaItem.fromUri(mediaUri))
+                                player.prepare()
+                                player.seekTo(snapshot.progressMs)
+                                player.pause()
+                            } catch (e: Exception) {
+                                // ignore
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
