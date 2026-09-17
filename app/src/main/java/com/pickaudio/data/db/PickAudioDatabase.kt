@@ -68,6 +68,11 @@ abstract class PickAudioDatabase : RoomDatabase() {
                             )
                         }
                     }
+
+                    override fun onOpen(db: SupportSQLiteDatabase) {
+                        super.onOpen(db)
+                        db.execSQL("PRAGMA foreign_keys = ON;")
+                    }
                 }).build()
                 INSTANCE = instance
                 instance

@@ -14,6 +14,7 @@ local.properties
 # Built APKs in root or build folders
 /app/build/
 *.apk
+*.idsig
 
 # Kotlin
 .kotlin

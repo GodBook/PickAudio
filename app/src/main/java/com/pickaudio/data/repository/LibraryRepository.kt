@@ -245,4 +245,52 @@ class LibraryRepository(
         scanDocFile(root)
         count
     }
+
+    suspend fun deleteTrack(trackId: String, deleteFile: Boolean = false): Boolean = withContext(Dispatchers.IO) {
+        try {
+            if (deleteFile) {
+                val assets = localAssetDao.getAssetsForTrack(trackId)
+                for (asset in assets) {
+                    try {
+                        val uri = Uri.parse(asset.uri)
+                        if (uri.scheme == "file" || uri.scheme == null) {
+                            val path = uri.path ?: asset.uri
+                            val file = File(path)
+                            if (file.exists()) {
+                                file.delete()
+                            }
+                        } else if (uri.scheme == "content") {
+                            try {
+                                context.contentResolver.delete(uri, null, null)
+                            } catch (e: Exception) {
+                                try {
+                                    val doc = DocumentFile.fromSingleUri(context, uri)
+                                    doc?.delete()
+                                } catch (e2: Exception) {
+                                    // ignore
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // ignore file deletion error
+                    }
+                }
+            }
+
+            // Explicitly clean up all related references
+            localAssetDao.deleteByTrackId(trackId)
+            database.onlineRefDao().deleteByTrackId(trackId)
+            database.playlistDao().removeTrackFromAllPlaylists(trackId)
+            favoriteDao.removeFavorite(trackId)
+            database.queueDao().removeTrackFromQueue(trackId)
+            database.lyricDao().deleteLyric(trackId)
+            database.downloadDao().deleteTasksByTrackId(trackId)
+
+            // Finally delete track entity
+            trackDao.deleteById(trackId)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
 }

@@ -88,4 +88,32 @@ class PlaybackModeLogicTest {
         assertEquals(playedOrder[4], history.pop())
         assertEquals(playedOrder[3], history.pop())
     }
+
+    @Test
+    fun testQueueItemRemoval() {
+        val queue = mutableListOf("track1", "track2", "track3")
+        var currentIndex = 1 // track2 playing
+
+        // Remove track before current
+        fun removeItem(index: Int): Int {
+            queue.removeAt(index)
+            return if (index < currentIndex) {
+                currentIndex - 1
+            } else if (index == currentIndex) {
+                if (index < queue.size) index else 0
+            } else {
+                currentIndex
+            }
+        }
+
+        // Remove track3 (after current)
+        currentIndex = removeItem(2)
+        assertEquals(1, currentIndex)
+        assertEquals(listOf("track1", "track2"), queue)
+
+        // Remove track1 (before current)
+        currentIndex = removeItem(0)
+        assertEquals(0, currentIndex)
+        assertEquals(listOf("track2"), queue)
+    }
 }

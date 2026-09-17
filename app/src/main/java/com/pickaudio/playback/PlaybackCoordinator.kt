@@ -299,6 +299,14 @@ class PlaybackCoordinator(
         saveSnapshot()
     }
 
+    fun removeTrackFromQueue(trackId: String) {
+        val currentList = _queue.value
+        val indices = currentList.mapIndexedNotNull { idx, t -> if (t.id == trackId) idx else null }.reversed()
+        for (idx in indices) {
+            removeQueueItem(idx)
+        }
+    }
+
     fun clearQueue() {
         player.stop()
         _queue.value = emptyList()

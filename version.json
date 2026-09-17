@@ -1,9 +1,9 @@
 {
-  "versionCode": 3,
-  "versionName": "1.1.1",
-  "changelog": "1. 彻底修复播放音乐数秒后闪退的重大缺陷（消除跨线程访问 ExoPlayer 导致的崩溃）\n2. 增加全局与协程异常拦截容错，保障后台与前台播放稳定性\n3. 优化 MediaSessionService 广播注册兼容性（适配 Android 14+ / Android 16 规范）\n4. 开启网络音频唤醒锁与耳机断开智能降噪保护",
-  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.1.1/PickAudio-v1.1.1-release.apk",
-  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.1.1",
-  "apkSize": 53522584,
+  "versionCode": 4,
+  "versionName": "1.1.2",
+  "changelog": "1. 本地曲库每首歌曲的更多选项（3点菜单）中增加“删除”功能\n2. 增加删除二次确认机制，防止误触导致歌曲丢失\n3. 支持可选同时删除本地存储中的音频源文件\n4. 删除歌曲时自动同步清理播放队列、收藏与歌单关联数据",
+  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.1.2/PickAudio-v1.1.2-release.apk",
+  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.1.2",
+  "apkSize": 53538968,
   "publishTime": "2026-09-17"
 }

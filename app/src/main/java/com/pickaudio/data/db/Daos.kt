@@ -46,6 +46,9 @@ interface LocalAssetDao {
 
     @Query("DELETE FROM local_assets WHERE uri = :uri")
     suspend fun deleteByUri(uri: String)
+
+    @Query("DELETE FROM local_assets WHERE trackId = :trackId")
+    suspend fun deleteByTrackId(trackId: String)
 }
 
 @Dao
@@ -58,6 +61,9 @@ interface OnlineRefDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdate(ref: OnlineRefEntity): Long
+
+    @Query("DELETE FROM online_refs WHERE trackId = :trackId")
+    suspend fun deleteByTrackId(trackId: String)
 }
 
 @Dao
@@ -82,6 +88,9 @@ interface PlaylistDao {
 
     @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId AND trackId = :trackId")
     suspend fun removeTrackFromPlaylist(playlistId: String, trackId: String)
+
+    @Query("DELETE FROM playlist_tracks WHERE trackId = :trackId")
+    suspend fun removeTrackFromAllPlaylists(trackId: String)
 
     @Query("SELECT MAX(sortOrder) FROM playlist_tracks WHERE playlistId = :playlistId")
     suspend fun getMaxSortOrder(playlistId: String): Int?
@@ -178,6 +187,9 @@ interface DownloadDao {
 
     @Query("DELETE FROM download_tasks WHERE id = :id")
     suspend fun deleteTask(id: String)
+
+    @Query("DELETE FROM download_tasks WHERE trackId = :trackId")
+    suspend fun deleteTasksByTrackId(trackId: String)
 
     @Query("UPDATE download_tasks SET status = :status, errorMessage = :error WHERE id = :id")
     suspend fun updateStatus(id: String, status: String, error: String? = null)

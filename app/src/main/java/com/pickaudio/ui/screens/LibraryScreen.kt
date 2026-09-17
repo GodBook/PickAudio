@@ -51,6 +51,9 @@ fun LibraryScreen(
     }
     val tracks by tracksFlow.collectAsState(initial = emptyList())
 
+    var trackToDelete by remember { mutableStateOf<Track?>(null) }
+    var deleteLocalFile by remember { mutableStateOf(false) }
+
     // SAF Pickers
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) {
@@ -212,12 +215,88 @@ fun LibraryScreen(
                             onAddToQueue = { playbackCoordinator.addToQueue(track) },
                             onToggleFavorite = {
                                 scope.launch { playlistRepository.toggleFavorite(track.id) }
+                            },
+                            onDelete = {
+                                trackToDelete = track
+                                deleteLocalFile = false
                             }
                         )
                     }
                 }
             }
         }
+    }
+
+    // Delete confirmation dialog
+    if (trackToDelete != null) {
+        val track = trackToDelete!!
+        AlertDialog(
+            onDismissRequest = {
+                trackToDelete = null
+                deleteLocalFile = false
+            },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("删除歌曲") },
+            text = {
+                Column {
+                    Text("确定要从曲库中删除《${track.title}》吗？")
+                    if (track.localUri != null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { deleteLocalFile = !deleteLocalFile }
+                        ) {
+                            Checkbox(
+                                checked = deleteLocalFile,
+                                onCheckedChange = { deleteLocalFile = it }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "同时删除本地源文件",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val toDelete = track
+                        val shouldDeleteFile = deleteLocalFile
+                        trackToDelete = null
+                        deleteLocalFile = false
+                        scope.launch {
+                            playbackCoordinator.removeTrackFromQueue(toDelete.id)
+                            val success = libraryRepository.deleteTrack(toDelete.id, shouldDeleteFile)
+                            if (success) {
+                                Toast.makeText(context, "已从曲库中删除", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "删除失败", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                ) {
+                    Text("删除", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    trackToDelete = null
+                    deleteLocalFile = false
+                }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 
@@ -228,6 +307,7 @@ fun TrackRowItem(
     onPlayNext: () -> Unit,
     onAddToQueue: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -310,6 +390,21 @@ fun TrackRowItem(
                                 showMenu = false
                             },
                             leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) }
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                            onClick = {
+                                showMenu = false
+                                onDelete()
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
                         )
                     }
                 }
