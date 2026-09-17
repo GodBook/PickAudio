@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioManager
+import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.pickaudio.PickAudioApplication
@@ -29,7 +31,16 @@ class PlaybackService : MediaSessionService() {
         mediaSession = MediaSession.Builder(this, player).build()
 
         val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
-        registerReceiver(becomingNoisyReceiver, filter)
+        try {
+            ContextCompat.registerReceiver(
+                this,
+                becomingNoisyReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+        } catch (e: Exception) {
+            Log.w("PlaybackService", "Failed to register becomingNoisyReceiver: ${e.message}")
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
@@ -37,9 +48,12 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
-        unregisterReceiver(becomingNoisyReceiver)
+        try {
+            unregisterReceiver(becomingNoisyReceiver)
+        } catch (e: Exception) {
+            // ignore
+        }
         mediaSession?.run {
-            player.release()
             release()
             mediaSession = null
         }

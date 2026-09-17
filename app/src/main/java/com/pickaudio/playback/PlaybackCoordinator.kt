@@ -36,7 +36,10 @@ class PlaybackCoordinator(
     private val localAssetDao = database.localAssetDao()
     private val favoriteDao = database.favoriteDao()
 
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val coroutineExceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e("PlaybackCoordinator", "Unhandled coroutine error in PlaybackCoordinator", throwable)
+    }
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob() + coroutineExceptionHandler)
     private val gson = Gson()
 
     val player: ExoPlayer by lazy {
@@ -48,6 +51,8 @@ class PlaybackCoordinator(
                     .build(),
                 true // handle audio focus automatically
             )
+            setHandleAudioBecomingNoisy(true)
+            setWakeMode(C.WAKE_MODE_NETWORK)
             addListener(playerListener)
         }
     }
@@ -85,6 +90,7 @@ class PlaybackCoordinator(
 
     // Periodic progress saver
     private var progressTickerJob: Job? = null
+    private var snapshotSaverJob: Job? = null
     private var consecutiveFailures = 0
 
     init {
@@ -127,22 +133,30 @@ class PlaybackCoordinator(
 
     private fun startProgressTicker() {
         progressTickerJob?.cancel()
-        progressTickerJob = scope.launch {
+        progressTickerJob = scope.launch(Dispatchers.Main) {
             while (isActive) {
-                if (_isPlaying.value) {
-                    _currentPositionMs.value = player.currentPosition.coerceAtLeast(0L)
-                    _durationMs.value = player.duration.coerceAtLeast(0L)
+                try {
+                    if (_isPlaying.value) {
+                        _currentPositionMs.value = player.currentPosition.coerceAtLeast(0L)
+                        _durationMs.value = player.duration.coerceAtLeast(0L)
+                    }
+                } catch (e: Exception) {
+                    Log.w("PlaybackCoordinator", "Error updating progress ticker: ${e.message}")
                 }
                 delay(500)
             }
         }
 
-        // Periodic snapshot saver every 5s
-        scope.launch(Dispatchers.IO) {
+        snapshotSaverJob?.cancel()
+        snapshotSaverJob = scope.launch(Dispatchers.Main) {
             while (isActive) {
                 delay(5000)
-                if (_isPlaying.value) {
-                    saveSnapshot()
+                try {
+                    if (_isPlaying.value) {
+                        saveSnapshot()
+                    }
+                } catch (e: Exception) {
+                    Log.w("PlaybackCoordinator", "Error in snapshot saver loop: ${e.message}")
                 }
             }
         }
@@ -292,8 +306,12 @@ class PlaybackCoordinator(
         _currentTrack.value = null
         shuffleHistory.clear()
         scope.launch(Dispatchers.IO) {
-            queueDao.clearQueue()
-            saveSnapshot()
+            try {
+                queueDao.clearQueue()
+                saveSnapshot()
+            } catch (e: Exception) {
+                Log.w("PlaybackCoordinator", "clearQueue db error", e)
+            }
         }
     }
 
@@ -509,20 +527,30 @@ class PlaybackCoordinator(
 
     private fun saveSnapshot() {
         val curTrack = _currentTrack.value ?: return
-        val pos = player.currentPosition.coerceAtLeast(0L)
+        val pos = _currentPositionMs.value.coerceAtLeast(0L)
         val mode = _playbackMode.value.name
-        val historyJson = gson.toJson(shuffleHistory.toList())
+        val historyJson = synchronized(shuffleHistory) {
+            try {
+                gson.toJson(shuffleHistory.toList())
+            } catch (e: Exception) {
+                null
+            }
+        }
 
         scope.launch(Dispatchers.IO) {
-            playbackDao.saveSnapshot(
-                PlaybackSnapshotEntity(
-                    id = 1,
-                    currentTrackId = curTrack.id,
-                    progressMs = pos,
-                    playbackMode = mode,
-                    shuffleHistoryJson = historyJson
+            try {
+                playbackDao.saveSnapshot(
+                    PlaybackSnapshotEntity(
+                        id = 1,
+                        currentTrackId = curTrack.id,
+                        progressMs = pos,
+                        playbackMode = mode,
+                        shuffleHistoryJson = historyJson
+                    )
                 )
-            )
+            } catch (e: Exception) {
+                Log.w("PlaybackCoordinator", "Failed to save playback snapshot: ${e.message}")
+            }
         }
     }
 
