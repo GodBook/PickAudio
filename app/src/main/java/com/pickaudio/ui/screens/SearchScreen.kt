@@ -55,6 +55,8 @@ fun SearchScreen(
     downloadCoordinator: DownloadCoordinator,
     playlistRepository: PlaylistRepository,
     sourceManager: LxSourceManager,
+    searchStateManager: SearchStateManager,
+    onOpenPlayer: () -> Unit = {},
     onNavigateToSourceManager: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -62,10 +64,10 @@ fun SearchScreen(
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    var query by remember { mutableStateOf("") }
-    var selectedPlatform by remember { mutableStateOf(Platform.ALL) }
-    var isSearching by remember { mutableStateOf(false) }
-    var searchResults by remember { mutableStateOf<List<SearchSongItem>>(emptyList()) }
+    var query by searchStateManager::query
+    var selectedPlatform by searchStateManager::selectedPlatform
+    var isSearching by searchStateManager::isSearching
+    var searchResults by searchStateManager::searchResults
 
     val history by userPreferences.searchHistory.collectAsState(initial = emptyList())
     val playlists by playlistRepository.getAllPlaylists().collectAsState(initial = emptyList())
@@ -137,7 +139,7 @@ fun SearchScreen(
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (query.isNotEmpty()) {
-                        IconButton(onClick = { query = "" }) {
+                        IconButton(onClick = { searchStateManager.clear() }) {
                             Icon(Icons.Default.Close, contentDescription = "清除")
                         }
                     }
@@ -312,6 +314,7 @@ fun SearchScreen(
                                         onClick = {
                                             showMenu = false
                                             playOnlineTrack(item, playbackCoordinator, { showNoSourceDialog = true })
+                                            onOpenPlayer()
                                         },
                                         leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) }
                                     )
@@ -390,7 +393,7 @@ fun SearchScreen(
                                         leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAddCheck, contentDescription = null) }
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("下载") },
+                                        text = { Text("下载歌曲") },
                                         onClick = {
                                             showMenu = false
                                             songForDownload = item
@@ -419,6 +422,7 @@ fun SearchScreen(
                         modifier = Modifier.combinedClickable(
                             onClick = {
                                 playOnlineTrack(item, playbackCoordinator, { showNoSourceDialog = true })
+                                onOpenPlayer()
                             },
                             onLongClick = { showMenu = true }
                         )

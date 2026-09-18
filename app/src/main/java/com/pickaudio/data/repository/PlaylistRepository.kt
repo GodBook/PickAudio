@@ -3,6 +3,7 @@ package com.pickaudio.data.repository
 import com.pickaudio.data.db.*
 import com.pickaudio.data.model.Track
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import java.util.UUID
 
@@ -19,6 +20,8 @@ class PlaylistRepository(private val database: PickAudioDatabase) {
             list.map { entity ->
                 val assets = localAssetDao.getAssetsForTrack(entity.id)
                 val localUri = assets.firstOrNull { it.isAvailable }?.uri
+                val platform = if (entity.id.startsWith("online_wy_")) "wy" else if (entity.id.startsWith("online_tx_")) "tx" else null
+                val platformSongId = if (entity.id.startsWith("online_wy_") || entity.id.startsWith("online_tx_")) entity.id.removePrefix("online_wy_").removePrefix("online_tx_") else null
                 Track(
                     id = entity.id,
                     title = entity.title,
@@ -29,7 +32,9 @@ class PlaylistRepository(private val database: PickAudioDatabase) {
                     trackNumber = entity.trackNumber,
                     localUri = localUri,
                     isAvailable = localUri != null,
-                    isFavorite = true
+                    isFavorite = true,
+                    platform = platform,
+                    platformSongId = platformSongId
                 )
             }
         }
@@ -39,11 +44,13 @@ class PlaylistRepository(private val database: PickAudioDatabase) {
         if (playlistId == PickAudioDatabase.FAVORITE_PLAYLIST_ID) {
             return getFavoriteTracks()
         }
-        return playlistDao.getTracksForPlaylist(playlistId).map { list ->
+        return combine(playlistDao.getTracksForPlaylist(playlistId), favoriteDao.getAllFavoriteTrackIds()) { list, favIds ->
+            val favSet = favIds.toSet()
             list.map { entity ->
-                val isFav = favoriteDao.isFavoriteSync(entity.id)
                 val assets = localAssetDao.getAssetsForTrack(entity.id)
                 val localUri = assets.firstOrNull { it.isAvailable }?.uri
+                val platform = if (entity.id.startsWith("online_wy_")) "wy" else if (entity.id.startsWith("online_tx_")) "tx" else null
+                val platformSongId = if (entity.id.startsWith("online_wy_") || entity.id.startsWith("online_tx_")) entity.id.removePrefix("online_wy_").removePrefix("online_tx_") else null
                 Track(
                     id = entity.id,
                     title = entity.title,
@@ -54,7 +61,9 @@ class PlaylistRepository(private val database: PickAudioDatabase) {
                     trackNumber = entity.trackNumber,
                     localUri = localUri,
                     isAvailable = localUri != null,
-                    isFavorite = isFav
+                    isFavorite = favSet.contains(entity.id),
+                    platform = platform,
+                    platformSongId = platformSongId
                 )
             }
         }

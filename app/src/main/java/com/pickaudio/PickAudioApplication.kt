@@ -20,6 +20,7 @@ class PickAudioApplication : Application() {
     val playlistRepository: PlaylistRepository by lazy { PlaylistRepository(database) }
     val backupManager: BackupManager by lazy { BackupManager(this, database) }
     val appUpdateManager: com.pickaudio.update.AppUpdateManager by lazy { com.pickaudio.update.AppUpdateManager(this) }
+    val searchStateManager: com.pickaudio.ui.screens.SearchStateManager by lazy { com.pickaudio.ui.screens.SearchStateManager() }
 
     override fun onCreate() {
         super.onCreate()

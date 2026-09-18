@@ -110,6 +110,9 @@ interface FavoriteDao {
     @Query("SELECT EXISTS(SELECT 1 FROM favorites WHERE trackId = :trackId)")
     suspend fun isFavoriteSync(trackId: String): Boolean
 
+    @Query("SELECT trackId FROM favorites")
+    fun getAllFavoriteTrackIds(): Flow<List<String>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun addFavorite(fav: FavoriteEntity)
 

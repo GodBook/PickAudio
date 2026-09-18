@@ -16,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -70,6 +71,8 @@ fun MainApp(app: PickAudioApplication) {
 
     var showFullPlayer by remember { mutableStateOf(false) }
     var currentRoute by remember { mutableStateOf(Screen.Library.route) }
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val activeRoute = navBackStackEntry?.destination?.route ?: currentRoute
 
     // Favorite status for current track
     val isCurrentFav by remember(currentTrack?.id) {
@@ -104,30 +107,40 @@ fun MainApp(app: PickAudioApplication) {
 
                     NavigationBar {
                         NavigationBarItem(
-                            selected = currentRoute == Screen.Library.route,
+                            selected = activeRoute == Screen.Library.route,
                             onClick = {
                                 currentRoute = Screen.Library.route
                                 navController.navigate(Screen.Library.route) {
-                                    popUpTo(Screen.Library.route) { inclusive = true }
+                                    popUpTo(Screen.Library.route) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
                                 }
                             },
                             icon = { Icon(Icons.Default.LibraryMusic, contentDescription = "曲库") },
                             label = { Text("曲库") }
                         )
                         NavigationBarItem(
-                            selected = currentRoute == Screen.Playlists.route,
+                            selected = activeRoute == Screen.Playlists.route,
                             onClick = {
                                 currentRoute = Screen.Playlists.route
-                                navController.navigate(Screen.Playlists.route)
+                                navController.navigate(Screen.Playlists.route) {
+                                    popUpTo(Screen.Library.route) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
                             },
                             icon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "歌单") },
                             label = { Text("歌单") }
                         )
                         NavigationBarItem(
-                            selected = currentRoute == Screen.Search.route,
+                            selected = activeRoute == Screen.Search.route,
                             onClick = {
                                 currentRoute = Screen.Search.route
-                                navController.navigate(Screen.Search.route)
+                                navController.navigate(Screen.Search.route) {
+                                    popUpTo(Screen.Library.route) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
                             },
                             icon = { Icon(Icons.Default.Search, contentDescription = "搜索") },
                             label = { Text("搜索") }
@@ -178,6 +191,8 @@ fun MainApp(app: PickAudioApplication) {
                         downloadCoordinator = app.downloadCoordinator,
                         playlistRepository = app.playlistRepository,
                         sourceManager = app.sourceManager,
+                        searchStateManager = app.searchStateManager,
+                        onOpenPlayer = { showFullPlayer = true },
                         onNavigateToSourceManager = {
                             navController.navigate(Screen.SourceManager.route)
                         }

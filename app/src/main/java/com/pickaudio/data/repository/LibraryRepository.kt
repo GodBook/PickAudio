@@ -12,6 +12,7 @@ import com.pickaudio.data.db.*
 import com.pickaudio.data.model.Track
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -28,11 +29,13 @@ class LibraryRepository(
     private val importRootDao = database.importRootDao()
 
     fun getAllTracks(): Flow<List<Track>> {
-        return trackDao.getAllTracks().map { list ->
+        return combine(trackDao.getAllTracks(), favoriteDao.getAllFavoriteTrackIds()) { list, favIds ->
+            val favSet = favIds.toSet()
             list.map { entity ->
-                val isFav = favoriteDao.isFavoriteSync(entity.id)
                 val assets = localAssetDao.getAssetsForTrack(entity.id)
                 val localUri = assets.firstOrNull { it.isAvailable }?.uri
+                val platform = if (entity.id.startsWith("online_wy_")) "wy" else if (entity.id.startsWith("online_tx_")) "tx" else null
+                val platformSongId = if (entity.id.startsWith("online_wy_") || entity.id.startsWith("online_tx_")) entity.id.removePrefix("online_wy_").removePrefix("online_tx_") else null
                 Track(
                     id = entity.id,
                     title = entity.title,
@@ -43,18 +46,22 @@ class LibraryRepository(
                     trackNumber = entity.trackNumber,
                     localUri = localUri,
                     isAvailable = localUri != null,
-                    isFavorite = isFav
+                    isFavorite = favSet.contains(entity.id),
+                    platform = platform,
+                    platformSongId = platformSongId
                 )
             }
         }
     }
 
     fun searchTracks(query: String): Flow<List<Track>> {
-        return trackDao.searchTracks(query).map { list ->
+        return combine(trackDao.searchTracks(query), favoriteDao.getAllFavoriteTrackIds()) { list, favIds ->
+            val favSet = favIds.toSet()
             list.map { entity ->
-                val isFav = favoriteDao.isFavoriteSync(entity.id)
                 val assets = localAssetDao.getAssetsForTrack(entity.id)
                 val localUri = assets.firstOrNull { it.isAvailable }?.uri
+                val platform = if (entity.id.startsWith("online_wy_")) "wy" else if (entity.id.startsWith("online_tx_")) "tx" else null
+                val platformSongId = if (entity.id.startsWith("online_wy_") || entity.id.startsWith("online_tx_")) entity.id.removePrefix("online_wy_").removePrefix("online_tx_") else null
                 Track(
                     id = entity.id,
                     title = entity.title,
@@ -65,7 +72,9 @@ class LibraryRepository(
                     trackNumber = entity.trackNumber,
                     localUri = localUri,
                     isAvailable = localUri != null,
-                    isFavorite = isFav
+                    isFavorite = favSet.contains(entity.id),
+                    platform = platform,
+                    platformSongId = platformSongId
                 )
             }
         }

@@ -1,9 +1,9 @@
 {
-  "versionCode": 5,
-  "versionName": "1.1.3",
-  "changelog": "1. 本地曲库每首歌曲支持一键加入自建歌单与我喜欢\n2. 搜索在线歌曲支持直接加入“我喜欢”歌单\n3. 全面支持歌曲条目长按：与点击右侧3个点菜单效果一致（支持加入歌单、移出歌单、下载、删除下载等）\n4. 歌单详情顶部支持一键选择“顺序播放”或“随机播放”\n5. 播放器及菜单支持直接选择“单曲循环”播放模式",
-  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.1.3/PickAudio-v1.1.3-release.apk",
-  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.1.3",
-  "apkSize": 53620888,
-  "publishTime": "2026-09-17"
+  "versionCode": 6,
+  "versionName": "1.1.4",
+  "changelog": "1. 曲库页面点击爱心图标即刻添加至我喜欢，再次点击可以取消并实时刷新状态\n2. 搜索页面的歌曲点击聆听后直接进入播放页面，退出播放页面精准回到原搜索结果页面\n3. 长按歌曲菜单与更多菜单统一添加「下载歌曲」与「删除下载」选项",
+  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.1.4/PickAudio-v1.1.4-release.apk",
+  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.1.4",
+  "apkSize": 53653656,
+  "publishTime": "2026-09-18"
 }

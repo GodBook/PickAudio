@@ -64,6 +64,7 @@ fun LibraryScreen(
     var trackToDelete by remember { mutableStateOf<Track?>(null) }
     var deleteLocalFile by remember { mutableStateOf(false) }
     var trackForPlaylist by remember { mutableStateOf<Track?>(null) }
+    var trackForDownload by remember { mutableStateOf<Track?>(null) }
 
     // SAF Pickers
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -225,21 +226,34 @@ fun LibraryScreen(
                             onPlayNext = { playbackCoordinator.playNext(track) },
                             onAddToQueue = { playbackCoordinator.addToQueue(track) },
                             onToggleFavorite = {
-                                scope.launch { playlistRepository.toggleFavorite(track.id) }
+                                scope.launch {
+                                    val isFav = playlistRepository.toggleFavorite(track.id)
+                                    Toast.makeText(context, if (isFav) "已添加至我喜欢" else "已取消喜欢", Toast.LENGTH_SHORT).show()
+                                }
                             },
                             onAddToPlaylist = {
                                 trackForPlaylist = track
                             },
-                            onDeleteDownload = if (downloadCoordinator != null && track.isAvailable) {
-                                {
+                            onDownloadTrack = {
+                                val hasOnline = (track.platform != null && track.platformSongId != null) || track.id.startsWith("online_")
+                                if (hasOnline) {
+                                    trackForDownload = track
+                                } else {
+                                    Toast.makeText(context, "本地歌曲无需下载", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onDeleteDownload = {
+                                if (downloadCoordinator != null) {
                                     scope.launch {
                                         val ok = downloadCoordinator.deleteDownloadForTrack(track.id)
                                         if (ok) {
                                             Toast.makeText(context, "已删除本地下载", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "暂无本地下载文件", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
-                            } else null,
+                            },
                             onDelete = {
                                 trackToDelete = track
                                 deleteLocalFile = false
@@ -362,6 +376,53 @@ fun LibraryScreen(
             }
         )
     }
+
+    // Download Quality Selection Dialog
+    if (trackForDownload != null && downloadCoordinator != null) {
+        val t = trackForDownload!!
+        val platform = t.platform ?: if (t.id.startsWith("online_wy_")) "wy" else "tx"
+        val songId = t.platformSongId ?: t.id.removePrefix("online_wy_").removePrefix("online_tx_")
+        val qualities = listOf("128k", "320k", "flac")
+        AlertDialog(
+            onDismissRequest = { trackForDownload = null },
+            title = { Text("选择下载音质") },
+            text = {
+                Column {
+                    Text(text = "${t.title} - ${t.artist}", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    qualities.forEach { q ->
+                        FilledTonalButton(
+                            onClick = {
+                                scope.launch {
+                                    downloadCoordinator.enqueueDownload(
+                                        trackId = t.id,
+                                        title = t.title,
+                                        artist = t.artist,
+                                        album = t.album,
+                                        coverUri = t.coverUri,
+                                        platform = platform,
+                                        platformSongId = songId,
+                                        quality = q
+                                    )
+                                    Toast.makeText(context, "已加入下载任务", Toast.LENGTH_SHORT).show()
+                                }
+                                trackForDownload = null
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Text("下载 $q 音质")
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { trackForDownload = null }) { Text("取消") }
+            }
+        )
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -373,7 +434,8 @@ fun TrackRowItem(
     onAddToQueue: () -> Unit,
     onToggleFavorite: () -> Unit,
     onAddToPlaylist: () -> Unit,
-    onDeleteDownload: (() -> Unit)? = null,
+    onDownloadTrack: () -> Unit,
+    onDeleteDownload: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -466,16 +528,22 @@ fun TrackRowItem(
                             },
                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAddCheck, contentDescription = null) }
                         )
-                        if (onDeleteDownload != null) {
-                            DropdownMenuItem(
-                                text = { Text("删除下载") },
-                                onClick = {
-                                    showMenu = false
-                                    onDeleteDownload()
-                                },
-                                leadingIcon = { Icon(Icons.Default.DeleteOutline, contentDescription = null) }
-                            )
-                        }
+                        DropdownMenuItem(
+                            text = { Text("下载歌曲") },
+                            onClick = {
+                                showMenu = false
+                                onDownloadTrack()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("删除下载") },
+                            onClick = {
+                                showMenu = false
+                                onDeleteDownload()
+                            },
+                            leadingIcon = { Icon(Icons.Default.DeleteOutline, contentDescription = null) }
+                        )
                         HorizontalDivider()
                         DropdownMenuItem(
                             text = { Text("删除", color = MaterialTheme.colorScheme.error) },
