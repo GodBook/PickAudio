@@ -2,6 +2,7 @@ package com.pickaudio.ui.screens
 
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -49,6 +50,8 @@ fun PlaylistDetailScreen(
     val scope = rememberCoroutineScope()
     val tracks by playlistRepository.getTracksForPlaylist(playlistId).collectAsState(initial = emptyList())
     val allPlaylists by playlistRepository.getAllPlaylists().collectAsState(initial = emptyList())
+    val currentPlayingTrack by playbackCoordinator.currentTrack.collectAsState()
+    val isPlaybackPlaying by playbackCoordinator.isPlaying.collectAsState()
     var trackForPlaylist by remember { mutableStateOf<Track?>(null) }
     var trackForDownload by remember { mutableStateOf<Track?>(null) }
 
@@ -139,12 +142,17 @@ fun PlaylistDetailScreen(
                 ) {
                     itemsIndexed(tracks) { index, track ->
                         var showMenu by remember { mutableStateOf(false) }
+                        val isCurrent = (track.id == currentPlayingTrack?.id)
 
                         ListItem(
+                            colors = ListItemDefaults.colors(
+                                containerColor = if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent
+                            ),
                             headlineContent = {
                                 Text(
                                     text = track.title,
-                                    fontWeight = FontWeight.Medium,
+                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -179,6 +187,21 @@ fun PlaylistDetailScreen(
                                             Box(contentAlignment = Alignment.Center) {
                                                 Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(20.dp))
                                             }
+                                        }
+                                    }
+                                    if (isCurrent) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(Color.Black.copy(alpha = 0.45f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isPlaybackPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(22.dp)
+                                            )
                                         }
                                     }
                                 }

@@ -3,10 +3,12 @@ package com.pickaudio.ui.screens
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
@@ -209,8 +211,14 @@ fun PlayerScreen(
                             modifier = Modifier
                                 .fillMaxWidth(0.85f)
                                 .aspectRatio(1f)
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                                .shadow(elevation = 16.dp, shape = RoundedCornerShape(24.dp), clip = false)
+                                .clip(RoundedCornerShape(24.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .border(
+                                    width = 1.dp,
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(24.dp)
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             if (!track.coverUri.isNullOrEmpty()) {

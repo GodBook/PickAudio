@@ -1,9 +1,9 @@
 {
-  "versionCode": 6,
-  "versionName": "1.1.4",
-  "changelog": "1. 曲库页面点击爱心图标即刻添加至我喜欢，再次点击可以取消并实时刷新状态\n2. 搜索页面的歌曲点击聆听后直接进入播放页面，退出播放页面精准回到原搜索结果页面\n3. 长按歌曲菜单与更多菜单统一添加「下载歌曲」与「删除下载」选项",
-  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.1.4/PickAudio-v1.1.4-release.apk",
-  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.1.4",
-  "apkSize": 53653656,
+  "versionCode": 7,
+  "versionName": "1.1.5",
+  "changelog": "1. 采用全新品牌发光音符应用图标，适配自适应图标与高清桌面图标\n2. 引入 ExoPlayer 256MB LRU 磁盘媒体缓存与预加载缓冲优化，大幅提升播放流畅度与网络抗抖动性\n3. 修复 302 跨协议重定向拦截问题，增加多级智能回退与重试机制，大幅减少无法播放的情况\n4. 全面优化 UI：统一科技蓝/电光青高质感配色，曲库、搜索与歌单中增加当前播放曲目实时高亮与音波指示，底部 MiniPlayer 与全屏播放器质感全面升级",
+  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.1.5/PickAudio-v1.1.5-release.apk",
+  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.1.5",
+  "apkSize": 53879498,
   "publishTime": "2026-09-18"
 }

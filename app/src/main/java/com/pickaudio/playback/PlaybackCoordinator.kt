@@ -8,7 +8,9 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.pickaudio.data.db.OnlineRefEntity
@@ -42,19 +44,36 @@ class PlaybackCoordinator(
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob() + coroutineExceptionHandler)
     private val gson = Gson()
 
+    private var hasAttemptedFallback = false
+
     val player: ExoPlayer by lazy {
-        ExoPlayer.Builder(context).build().apply {
-            setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                    .setUsage(C.USAGE_MEDIA)
-                    .build(),
-                true // handle audio focus automatically
+        val dataSourceFactory = AudioCacheManager.createDataSourceFactory(context)
+        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs = */ 15_000,
+                /* maxBufferMs = */ 60_000,
+                /* bufferForPlaybackMs = */ 1_000,
+                /* bufferForPlaybackAfterRebufferMs = */ 2_000
             )
-            setHandleAudioBecomingNoisy(true)
-            setWakeMode(C.WAKE_MODE_NETWORK)
-            addListener(playerListener)
-        }
+            .setBackBuffer(15_000, true)
+            .build()
+
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .setLoadControl(loadControl)
+            .build().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                        .setUsage(C.USAGE_MEDIA)
+                        .build(),
+                    true // handle audio focus automatically
+                )
+                setHandleAudioBecomingNoisy(true)
+                setWakeMode(C.WAKE_MODE_NETWORK)
+                addListener(playerListener)
+            }
     }
 
     private val _currentTrack = MutableStateFlow<Track?>(null)
@@ -114,6 +133,34 @@ class PlaybackCoordinator(
 
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
             Log.e("PlaybackCoordinator", "ExoPlayer playback error: ${error.errorCodeName}", error)
+            val cur = _currentTrack.value
+            if (!hasAttemptedFallback && cur != null) {
+                hasAttemptedFallback = true
+                scope.launch {
+                    val fallbackUri = tryFallbackUri(cur)
+                    if (fallbackUri != null) {
+                        Log.i("PlaybackCoordinator", "Retrying playback with fallback stream: $fallbackUri")
+                        try {
+                            val mediaItem = MediaItem.Builder()
+                                .setUri(fallbackUri)
+                                .setMediaId(cur.id)
+                                .build()
+                            player.setMediaItem(mediaItem)
+                            player.prepare()
+                            player.play()
+                            return@launch
+                        } catch (e: Exception) {
+                            Log.w("PlaybackCoordinator", "Fallback retry failed: ${e.message}")
+                        }
+                    }
+                    handlePlaybackFailure(error)
+                }
+                return
+            }
+            handlePlaybackFailure(error)
+        }
+
+        private fun handlePlaybackFailure(error: androidx.media3.common.PlaybackException) {
             _isPlaying.value = false
             consecutiveFailures++
             scope.launch(Dispatchers.Main) {
@@ -447,6 +494,7 @@ class PlaybackCoordinator(
     private fun playTrack(track: Track, isBackTracking: Boolean = false) {
         _currentTrack.value = track
         _currentPositionMs.value = 0L
+        hasAttemptedFallback = false
 
         scope.launch {
             try {
@@ -479,6 +527,28 @@ class PlaybackCoordinator(
         saveSnapshot()
     }
 
+    private suspend fun tryFallbackUri(track: Track): Uri? = withContext(Dispatchers.IO) {
+        val platform = track.platform
+            ?: database.onlineRefDao().getByTrackId(track.id)?.platform
+            ?: if (track.id.startsWith("online_wy_")) "wy" else if (track.id.startsWith("online_tx_")) "tx" else null
+        val songId = track.platformSongId
+            ?: database.onlineRefDao().getByTrackId(track.id)?.platformSongId
+            ?: track.id.removePrefix("online_wy_").removePrefix("online_tx_")
+
+        if (platform == "wy" && songId.isNotBlank()) {
+            return@withContext Uri.parse("https://music.163.com/song/media/outer/url?id=$songId.mp3")
+        }
+        if (platform == "tx" && songId.isNotBlank()) {
+            try {
+                val fallbackUrl = sourceManager.resolveMusicUrl("tx", songId, "128k", track.title, track.artist)
+                return@withContext Uri.parse(fallbackUrl)
+            } catch (e: Exception) {
+                Log.w("PlaybackCoordinator", "Failed to resolve fallback for tx: ${e.message}")
+            }
+        }
+        null
+    }
+
     private suspend fun resolveTrackMediaUri(track: Track): Uri = withContext(Dispatchers.IO) {
         // 1. Check local asset
         val assets = localAssetDao.getAssetsForTrack(track.id)
@@ -496,8 +566,21 @@ class PlaybackCoordinator(
             ?: track.id.removePrefix("online_wy_").removePrefix("online_tx_")
 
         if (platform != null && songId.isNotBlank()) {
-            val url = sourceManager.resolveMusicUrl(platform, songId, "320k", track.title, track.artist)
-            return@withContext Uri.parse(url)
+            try {
+                val url = sourceManager.resolveMusicUrl(platform, songId, "320k", track.title, track.artist)
+                return@withContext Uri.parse(url)
+            } catch (e: Exception) {
+                Log.w("PlaybackCoordinator", "Failed to resolve 320k, falling back to 128k: ${e.message}")
+                try {
+                    val url128 = sourceManager.resolveMusicUrl(platform, songId, "128k", track.title, track.artist)
+                    return@withContext Uri.parse(url128)
+                } catch (e2: Exception) {
+                    if (platform == "wy") {
+                        return@withContext Uri.parse("https://music.163.com/song/media/outer/url?id=$songId.mp3")
+                    }
+                    throw e2
+                }
+            }
         }
 
         // Fallback to track localUri if present

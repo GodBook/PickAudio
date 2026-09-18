@@ -51,6 +51,12 @@ class LxSourceManager(
         .writeTimeout(10, TimeUnit.SECONDS)
         .build()
 
+    // Fast OkHttp client for quick API probing with 3s timeout
+    private val quickHttpClient = OkHttpClient.Builder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(3, TimeUnit.SECONDS)
+        .build()
+
     // Active runtime instances per source ID
     private val activeEngines = ConcurrentHashMap<String, QuickJsEngine>()
     private val sourceCapabilities = ConcurrentHashMap<String, Map<String, SourcePlatformCapability>>()
@@ -414,14 +420,14 @@ class LxSourceManager(
         artist: String?
     ): String {
         if (platform == "wy") {
-            // Priority 1: GDStudio NetEase API (High Quality 320k / 128k)
+            // Priority 1: GDStudio NetEase API (High Quality 320k / 128k) with quick timeout
             try {
                 val br = if (quality == "flac" || quality == "320k") "320" else "128"
                 val req = Request.Builder()
                     .url("https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id=$songId&br=$br")
                     .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
                     .build()
-                val resp = okHttpClient.newCall(req).execute()
+                val resp = quickHttpClient.newCall(req).execute()
                 if (resp.isSuccessful) {
                     val body = resp.body?.string() ?: ""
                     val json = JsonParser.parseString(body).asJsonObject
@@ -433,15 +439,16 @@ class LxSourceManager(
                     }
                 }
             } catch (e: Exception) {
-                Log.w("LxSourceManager", "Builtin wy GDStudio failed: ${e.message}")
+                Log.w("LxSourceManager", "Builtin wy GDStudio failed/timeout: ${e.message}")
             }
 
-            // Priority 2: Paugram API
+            // Priority 2: Paugram API with quick timeout
             try {
                 val req = Request.Builder()
                     .url("https://api.paugram.com/netease/?id=$songId")
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
                     .build()
-                val resp = okHttpClient.newCall(req).execute()
+                val resp = quickHttpClient.newCall(req).execute()
                 if (resp.isSuccessful) {
                     val body = resp.body?.string() ?: ""
                     val json = JsonParser.parseString(body).asJsonObject
@@ -451,10 +458,10 @@ class LxSourceManager(
                     }
                 }
             } catch (e: Exception) {
-                Log.w("LxSourceManager", "Builtin wy Paugram failed: ${e.message}")
+                Log.w("LxSourceManager", "Builtin wy Paugram failed/timeout: ${e.message}")
             }
 
-            // Priority 3: NetEase standard outer URL (HTTP 302 stream)
+            // Priority 3: NetEase standard outer URL (HTTP 302 stream - rock solid with cross-protocol redirect)
             return "https://music.163.com/song/media/outer/url?id=$songId.mp3"
         } else if (platform == "tx") {
             // For QQ Music, cross-match NetEase database with song title and artist
@@ -469,25 +476,35 @@ class LxSourceManager(
             }
 
             if (!queryTitle.isNullOrBlank()) {
-                try {
-                    val searchKeyword = java.net.URLEncoder.encode("$queryTitle ${queryArtist ?: ""}".trim(), "UTF-8")
-                    val searchUrl = "https://music.163.com/api/search/get/web?csrf_token=&s=$searchKeyword&type=1&offset=0&total=true&limit=1"
-                    val searchReq = Request.Builder()
-                        .url(searchUrl)
-                        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                        .build()
-                    val resp = okHttpClient.newCall(searchReq).execute()
-                    if (resp.isSuccessful) {
-                        val body = resp.body?.string() ?: ""
-                        val root = JsonParser.parseString(body).asJsonObject
-                        val songs = root.getAsJsonObject("result")?.getAsJsonArray("songs")
-                        if (songs != null && songs.size() > 0) {
-                            val matchedSongId = songs[0].asJsonObject.get("id").asLong.toString()
-                            return resolveBuiltinMusicUrl("wy", matchedSongId, quality, queryTitle, queryArtist)
+                val cleanTitle = queryTitle.replace(Regex("""\s*[\(（].*?[\)）]\s*"""), "").trim()
+                val queries = listOf(
+                    "$queryTitle ${queryArtist ?: ""}".trim(),
+                    if (cleanTitle != queryTitle && cleanTitle.isNotEmpty()) "$cleanTitle ${queryArtist ?: ""}".trim() else null,
+                    queryTitle.trim(),
+                    if (cleanTitle != queryTitle && cleanTitle.isNotEmpty()) cleanTitle else null
+                ).filterNotNull().distinct()
+
+                for (q in queries) {
+                    try {
+                        val searchKeyword = java.net.URLEncoder.encode(q, "UTF-8")
+                        val searchUrl = "https://music.163.com/api/search/get/web?csrf_token=&s=$searchKeyword&type=1&offset=0&total=true&limit=1"
+                        val searchReq = Request.Builder()
+                            .url(searchUrl)
+                            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                            .build()
+                        val resp = quickHttpClient.newCall(searchReq).execute()
+                        if (resp.isSuccessful) {
+                            val body = resp.body?.string() ?: ""
+                            val root = JsonParser.parseString(body).asJsonObject
+                            val songs = root.getAsJsonObject("result")?.getAsJsonArray("songs")
+                            if (songs != null && songs.size() > 0) {
+                                val matchedSongId = songs[0].asJsonObject.get("id").asLong.toString()
+                                return resolveBuiltinMusicUrl("wy", matchedSongId, quality, queryTitle, queryArtist)
+                            }
                         }
+                    } catch (e: Exception) {
+                        Log.w("LxSourceManager", "Builtin tx cross-match query '$q' failed: ${e.message}")
                     }
-                } catch (e: Exception) {
-                    Log.w("LxSourceManager", "Builtin tx cross-match failed: ${e.message}")
                 }
             }
 

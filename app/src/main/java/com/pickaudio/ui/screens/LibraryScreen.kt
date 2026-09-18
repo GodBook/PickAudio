@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -60,6 +61,8 @@ fun LibraryScreen(
     }
     val tracks by tracksFlow.collectAsState(initial = emptyList())
     val allPlaylists by playlistRepository.getAllPlaylists().collectAsState(initial = emptyList())
+    val currentPlayingTrack by playbackCoordinator.currentTrack.collectAsState()
+    val isPlaybackPlaying by playbackCoordinator.isPlaying.collectAsState()
 
     var trackToDelete by remember { mutableStateOf<Track?>(null) }
     var deleteLocalFile by remember { mutableStateOf(false) }
@@ -222,6 +225,8 @@ fun LibraryScreen(
                     itemsIndexed(tracks) { index, track ->
                         TrackRowItem(
                             track = track,
+                            isCurrentTrack = (track.id == currentPlayingTrack?.id),
+                            isPlaying = isPlaybackPlaying,
                             onClick = { playbackCoordinator.setQueueAndPlay(tracks, index) },
                             onPlayNext = { playbackCoordinator.playNext(track) },
                             onAddToQueue = { playbackCoordinator.addToQueue(track) },
@@ -437,15 +442,21 @@ fun TrackRowItem(
     onDownloadTrack: () -> Unit,
     onDeleteDownload: () -> Unit,
     onDelete: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isCurrentTrack: Boolean = false,
+    isPlaying: Boolean = false
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
     ListItem(
+        colors = ListItemDefaults.colors(
+            containerColor = if (isCurrentTrack) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent
+        ),
         headlineContent = {
             Text(
                 text = track.title,
-                fontWeight = FontWeight.Medium,
+                fontWeight = if (isCurrentTrack) FontWeight.Bold else FontWeight.Medium,
+                color = if (isCurrentTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -481,6 +492,21 @@ fun TrackRowItem(
                         Box(contentAlignment = Alignment.Center) {
                             Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(24.dp))
                         }
+                    }
+                }
+                if (isCurrentTrack) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.45f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
                     }
                 }
             }
