@@ -10,13 +10,25 @@ import com.pickaudio.data.model.ThemeMode
 
 private val DarkColorScheme = darkColorScheme(
     primary = AccentBlue,
-    onPrimary = Color.White,
+    onPrimary = Color(0xFF15243A),
     primaryContainer = AccentPrimaryContainerDark,
+    onPrimaryContainer = Color(0xFFC5DDF4),
     secondary = AccentCyan,
     onSecondary = Color.Black,
+    secondaryContainer = Color(0xFF253B52),
+    onSecondaryContainer = Color(0xFFC5DDF4),
+    tertiary = AccentBlue,
+    tertiaryContainer = Color(0xFF253B52),
     background = DarkBackground,
     surface = DarkSurface,
     surfaceVariant = DarkSurfaceVariant,
+    surfaceContainerLowest = DarkBackground,
+    surfaceContainerLow = DarkSurface,
+    surfaceContainer = DarkSurfaceVariant,
+    surfaceContainerHigh = Color(0xFF273041),
+    surfaceContainerHighest = Color(0xFF303B4D),
+    outline = Color(0xFF8494A9),
+    outlineVariant = Color(0xFF364254),
     onBackground = DarkOnSurface,
     onSurface = DarkOnSurface,
     onSurfaceVariant = DarkOnSurfaceVariant
@@ -26,10 +38,22 @@ private val LightColorScheme = lightColorScheme(
     primary = AccentBlueDark,
     onPrimary = Color.White,
     primaryContainer = AccentPrimaryContainerLight,
+    onPrimaryContainer = Color(0xFF21496F),
     secondary = AccentBlue,
+    secondaryContainer = Color(0xFFE2ECF8),
+    onSecondaryContainer = Color(0xFF21496F),
+    tertiary = AccentBlueDark,
+    tertiaryContainer = Color(0xFFE2ECF8),
     background = LightBackground,
     surface = LightSurface,
     surfaceVariant = LightSurfaceVariant,
+    surfaceContainerLowest = LightSurface,
+    surfaceContainerLow = LightBackground,
+    surfaceContainer = Color(0xFFF0F4F9),
+    surfaceContainerHigh = Color(0xFFE8EEF6),
+    surfaceContainerHighest = LightSurfaceVariant,
+    outline = Color(0xFF65758B),
+    outlineVariant = Color(0xFFC6D1DF),
     onBackground = LightOnSurface,
     onSurface = LightOnSurface,
     onSurfaceVariant = LightOnSurfaceVariant
@@ -47,6 +71,14 @@ fun PickAudioTheme(
     }
 
     val context = LocalContext.current
+    androidx.compose.runtime.SideEffect {
+        (context as? android.app.Activity)?.let { activity ->
+            androidx.core.view.WindowCompat.getInsetsController(activity.window, activity.window.decorView).apply {
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
+            }
+        }
+    }
     val colorScheme = when {
         darkTheme -> DarkColorScheme
         else -> LightColorScheme

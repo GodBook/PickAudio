@@ -1,598 +1,148 @@
 package com.pickaudio.ui.screens
 
-import android.widget.Toast
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
-import androidx.compose.material.icons.automirrored.filled.PlaylistAddCheck
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.graphics.Color
-import com.pickaudio.data.db.PickAudioDatabase
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
-import com.pickaudio.data.db.PlaylistEntity
-import com.pickaudio.data.model.Platform
-import com.pickaudio.data.model.SearchSongItem
-import com.pickaudio.data.model.Track
+import com.pickaudio.data.model.*
 import com.pickaudio.data.preferences.UserPreferences
 import com.pickaudio.data.repository.PlaylistRepository
 import com.pickaudio.download.DownloadCoordinator
-import com.pickaudio.online.NetEaseSearchAdapter
-import com.pickaudio.online.QqMusicSearchAdapter
 import com.pickaudio.playback.PlaybackCoordinator
 import com.pickaudio.source.LxSourceManager
-import kotlinx.coroutines.async
+import com.pickaudio.ui.components.*
 import kotlinx.coroutines.launch
-import java.util.UUID
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SearchScreen(
-    userPreferences: UserPreferences,
-    playbackCoordinator: PlaybackCoordinator,
-    downloadCoordinator: DownloadCoordinator,
-    playlistRepository: PlaylistRepository,
-    sourceManager: LxSourceManager,
-    searchStateManager: SearchStateManager,
-    onOpenPlayer: () -> Unit = {},
-    onNavigateToSourceManager: () -> Unit,
-    modifier: Modifier = Modifier
+    userPreferences: UserPreferences, playbackCoordinator: PlaybackCoordinator,
+    downloadCoordinator: DownloadCoordinator, playlistRepository: PlaylistRepository,
+    sourceManager: LxSourceManager, searchStateManager: SearchStateManager,
+    onOpenPlayer: () -> Unit = {}, onNavigateToSourceManager: () -> Unit, modifier: Modifier = Modifier, onNavigateToDownload: () -> Unit = {}
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val keyboardController = LocalSoftwareKeyboardController.current
-
-    var query by searchStateManager::query
-    var selectedPlatform by searchStateManager::selectedPlatform
-    var isSearching by searchStateManager::isSearching
-    var searchResults by searchStateManager::searchResults
-
-    val currentPlayingTrack by playbackCoordinator.currentTrack.collectAsState()
-    val isPlaybackPlaying by playbackCoordinator.isPlaying.collectAsState()
-
+    val keyboard = LocalSoftwareKeyboardController.current
     val history by userPreferences.searchHistory.collectAsState(initial = emptyList())
-    val playlists by playlistRepository.getAllPlaylists().collectAsState(initial = emptyList())
-
-    // Dialog state
-    var songForDownload by remember { mutableStateOf<SearchSongItem?>(null) }
-    var songForPlaylist by remember { mutableStateOf<SearchSongItem?>(null) }
-    var showNoSourceDialog by remember { mutableStateOf(false) }
-
-    fun performSearch(keyword: String) {
-        val trimmed = keyword.trim()
-        if (trimmed.isBlank()) return
-        query = trimmed
-        keyboardController?.hide()
-        scope.launch {
-            userPreferences.addSearchHistory(trimmed)
-            isSearching = true
-            searchResults = emptyList()
-            try {
-                when (selectedPlatform) {
-                    Platform.NETEASE -> {
-                        searchResults = NetEaseSearchAdapter.search(trimmed)
-                    }
-                    Platform.QQ -> {
-                        searchResults = QqMusicSearchAdapter.search(trimmed)
-                    }
-                    Platform.ALL -> {
-                        val wyDeferred = async { try { NetEaseSearchAdapter.search(trimmed) } catch (e: Exception) { emptyList() } }
-                        val txDeferred = async { try { QqMusicSearchAdapter.search(trimmed) } catch (e: Exception) { emptyList() } }
-                        val wyList = wyDeferred.await()
-                        val txList = txDeferred.await()
-
-                        // Interleave results
-                        val combined = mutableListOf<SearchSongItem>()
-                        val maxLen = maxOf(wyList.size, txList.size)
-                        for (i in 0 until maxLen) {
-                            if (i < wyList.size) combined.add(wyList[i])
-                            if (i < txList.size) combined.add(txList[i])
-                        }
-                        searchResults = combined
-                    }
-                }
-            } catch (e: Exception) {
-                Toast.makeText(context, "搜索失败: ${e.message}", Toast.LENGTH_SHORT).show()
-            } finally {
-                isSearching = false
-            }
-        }
+    val current by playbackCoordinator.currentTrack.collectAsState()
+    val playing by playbackCoordinator.isPlaying.collectAsState()
+    val snack = remember { SnackbarHostState() }
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selecting by remember { mutableStateOf(false) }
+    var playlistTracks by remember { mutableStateOf<List<Track>?>(null) }
+    var downloadTracks by remember { mutableStateOf<List<Track>?>(null) }
+    val favorites by playlistRepository.getFavoriteTracks().collectAsState(initial = emptyList())
+    val favoriteIds = favorites.map { it.id }.toSet()
+    val allTracks = searchStateManager.searchResults.map { it.toTrack().copy(isFavorite = it.toTrack().id in favoriteIds) }
+    val selected = allTracks.filter { it.id in selectedIds }
+    fun select(id: String) { selecting = true; selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id }
+    fun search(keyword: String) {
+        if (keyword.isBlank()) return
+        selectedIds = emptySet(); selecting = false
+        keyboard?.hide()
+        searchStateManager.submit(keyword)
+        scope.launch { userPreferences.addSearchHistory(keyword.trim()) }
     }
+    fun message(text: String) { scope.launch { snack.showSnackbar(text) } }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("在线搜索", fontWeight = FontWeight.Bold) }
-            )
-        },
-        modifier = modifier.fillMaxSize()
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            // Search Input Field
+    Scaffold(topBar = {
+        TopAppBar(title = { Text("在线搜索", fontWeight = FontWeight.SemiBold) }, actions = {
+            TextButton(onClick = { selecting = !selecting; selectedIds = emptySet() }) { Text(if (selecting) "完成" else "多选") }
+            IconButton(onClick = onNavigateToDownload) { Icon(Icons.Default.Download, contentDescription = "下载管理") }
+            IconButton(onClick = onNavigateToSourceManager) { Icon(Icons.Default.Tune, contentDescription = "配置音乐源") }
+        })
+    }, snackbarHost = { SnackbarHost(snack) }, modifier = modifier.fillMaxSize()) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
             OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("输入歌曲、歌手或专辑名") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (query.isNotEmpty()) {
-                        IconButton(onClick = { searchStateManager.clear() }) {
-                            Icon(Icons.Default.Close, contentDescription = "清除")
-                        }
-                    }
-                },
+                value = searchStateManager.query, onValueChange = { searchStateManager.query = it },
+                placeholder = { Text("搜索歌曲、歌手或专辑", maxLines = 1, overflow = TextOverflow.Ellipsis) }, singleLine = true,
+                leadingIcon = { Icon(Icons.Default.Search, null) },
+                trailingIcon = { if (searchStateManager.query.isNotEmpty()) IconButton(onClick = { searchStateManager.clear() }) { Icon(Icons.Default.Close, "清除搜索") } },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { performSearch(query) }),
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                keyboardActions = KeyboardActions(onSearch = { search(searchStateManager.query) }),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
             )
-
-            // Platform Filter Chips
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Platform.entries.forEach { p ->
-                    FilterChip(
-                        selected = selectedPlatform == p,
-                        onClick = {
-                            selectedPlatform = p
-                            if (query.isNotBlank()) performSearch(query)
-                        },
-                        label = { Text(p.displayName) }
-                    )
+            FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Platform.entries.forEach { platform ->
+                    FilterChip(selected = searchStateManager.selectedPlatform == platform, onClick = {
+                        searchStateManager.selectedPlatform = platform
+                        if (searchStateManager.query.isNotBlank()) search(searchStateManager.query)
+                    }, label = { Text(platform.displayName) })
+                }
+                TextButton(onClick = { search(searchStateManager.query) }, enabled = searchStateManager.query.isNotBlank()) { Text("搜索") }
+            }
+            if (selecting) {
+                FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { selectedIds = allTracks.map { it.id }.toSet() }) { Text("全选 (${selectedIds.size})") }
+                    TextButton(onClick = { playlistTracks = selected }, enabled = selected.isNotEmpty()) { Text("加入歌单") }
+                    TextButton(onClick = { downloadTracks = selected }, enabled = selected.isNotEmpty()) { Text("下载") }
+                    TextButton(onClick = { selected.forEach { playbackCoordinator.addToQueue(it) }; message("已加入队尾") }, enabled = selected.isNotEmpty()) { Text("加入队列") }
                 }
             }
-
-            // Search History Chips (when no results yet)
-            if (searchResults.isEmpty() && !isSearching && history.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "搜索历史",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        TextButton(onClick = { scope.launch { userPreferences.clearSearchHistory() } }) {
-                            Text("清空", fontSize = 12.sp)
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        history.forEach { item ->
-                            InputChip(
-                                selected = false,
-                                onClick = { performSearch(item) },
-                                label = { Text(item) },
-                                trailingIcon = {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "删除",
-                                        modifier = Modifier
-                                            .size(14.dp)
-                                            .clickable {
-                                                scope.launch { userPreferences.removeSearchHistory(item) }
-                                            }
-                                    )
+            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 16.dp)) {
+                if (searchStateManager.submittedQuery.isEmpty()) {
+                    item {
+                        Column(Modifier.padding(20.dp)) {
+                            Text("搜索历史", style = MaterialTheme.typography.titleMedium)
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                history.forEach { value ->
+                                    InputChip(false, onClick = { search(value) }, label = { Text(value) }, trailingIcon = {
+                                        IconButton(onClick = { scope.launch { userPreferences.removeSearchHistory(value) } }, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.Close, "删除历史") }
+                                    })
                                 }
-                            )
+                            }
+                            if (history.isEmpty()) Text("输入歌名后搜索，两个平台会分别显示结果。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            else TextButton(onClick = { scope.launch { userPreferences.clearSearchHistory() } }) { Text("清空历史") }
                         }
                     }
                 }
-            }
-
-            // Loading indicator
-            if (isSearching) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator()
-                }
-            }
-
-            // Results List
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 96.dp)
-            ) {
-                items(searchResults) { item ->
-                    var showMenu by remember { mutableStateOf(false) }
-                    val isCurrent = (currentPlayingTrack?.id == "online_${item.platform}_${item.songId}" || currentPlayingTrack?.platformSongId == item.songId)
-
-                    ListItem(
-                        colors = ListItemDefaults.colors(
-                            containerColor = if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent
-                        ),
-                        headlineContent = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = item.title,
-                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f, fill = false)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                // Platform badge
-                                Surface(
-                                    color = if (item.platform == "wy") MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
-                                    shape = RoundedCornerShape(4.dp)
-                                ) {
-                                    Text(
-                                        text = if (item.platform == "wy") "网易" else "QQ",
-                                        fontSize = 10.sp,
-                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                    )
-                                }
-                            }
-                        },
-                        supportingContent = {
-                            Text(
-                                text = "${item.artist} · ${item.album}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        },
-                        leadingContent = {
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(RoundedCornerShape(8.dp)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (!item.coverUrl.isNullOrEmpty()) {
-                                    AsyncImage(
-                                        model = item.coverUrl,
-                                        contentDescription = item.title,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                } else {
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.surfaceVariant,
-                                        modifier = Modifier.fillMaxSize()
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(20.dp))
-                                        }
-                                    }
-                                }
-                                if (isCurrent) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(Color.Black.copy(alpha = 0.45f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = if (isPlaybackPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(22.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        },
-                        trailingContent = {
-                            Box {
-                                IconButton(onClick = { showMenu = true }) {
-                                    Icon(Icons.Default.MoreVert, contentDescription = "更多")
-                                }
-                                DropdownMenu(
-                                    expanded = showMenu,
-                                    onDismissRequest = { showMenu = false }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("在线播放") },
-                                        onClick = {
-                                            showMenu = false
-                                            playOnlineTrack(item, playbackCoordinator, { showNoSourceDialog = true })
-                                            onOpenPlayer()
-                                        },
-                                        leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("下一首播放") },
-                                        onClick = {
-                                            showMenu = false
-                                            val trackId = "online_${item.platform}_${item.songId}"
-                                            val track = com.pickaudio.data.model.Track(
-                                                id = trackId,
-                                                title = item.title,
-                                                artist = item.artist,
-                                                album = item.album,
-                                                durationMs = item.durationMs,
-                                                coverUri = item.coverUrl,
-                                                platform = item.platform,
-                                                platformSongId = item.songId
-                                            )
-                                            playbackCoordinator.playNext(track)
-                                            Toast.makeText(context, "已添加到下一首播放", Toast.LENGTH_SHORT).show()
-                                        },
-                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null) }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("添加到队尾") },
-                                        onClick = {
-                                            showMenu = false
-                                            val trackId = "online_${item.platform}_${item.songId}"
-                                            val track = com.pickaudio.data.model.Track(
-                                                id = trackId,
-                                                title = item.title,
-                                                artist = item.artist,
-                                                album = item.album,
-                                                durationMs = item.durationMs,
-                                                coverUri = item.coverUrl,
-                                                platform = item.platform,
-                                                platformSongId = item.songId
-                                            )
-                                            playbackCoordinator.addToQueue(track)
-                                            Toast.makeText(context, "已添加到播放队列队尾", Toast.LENGTH_SHORT).show()
-                                        },
-                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("加入「我喜欢」") },
-                                        onClick = {
-                                            showMenu = false
-                                            scope.launch {
-                                                try {
-                                                    val trackId = "online_${item.platform}_${item.songId}"
-                                                    val track = com.pickaudio.data.model.Track(
-                                                        id = trackId,
-                                                        title = item.title,
-                                                        artist = item.artist,
-                                                        album = item.album,
-                                                        durationMs = item.durationMs,
-                                                        coverUri = item.coverUrl,
-                                                        platform = item.platform,
-                                                        platformSongId = item.songId
-                                                    )
-                                                    playlistRepository.ensureTrackAndAddToPlaylist(PickAudioDatabase.FAVORITE_PLAYLIST_ID, track)
-                                                    Toast.makeText(context, "已添加到「我喜欢」", Toast.LENGTH_SHORT).show()
-                                                } catch (e: Exception) {
-                                                    Toast.makeText(context, "添加失败: ${e.message}", Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        },
-                                        leadingIcon = { Icon(Icons.Default.Favorite, contentDescription = null, tint = Color(0xFFFF4081)) }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("加入歌单") },
-                                        onClick = {
-                                            showMenu = false
-                                            songForPlaylist = item
-                                        },
-                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAddCheck, contentDescription = null) }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("下载歌曲") },
-                                        onClick = {
-                                            showMenu = false
-                                            songForDownload = item
-                                        },
-                                        leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("删除下载") },
-                                        onClick = {
-                                            showMenu = false
-                                            scope.launch {
-                                                val trackId = "online_${item.platform}_${item.songId}"
-                                                val ok = downloadCoordinator.deleteDownloadForTrack(trackId)
-                                                if (ok) {
-                                                    Toast.makeText(context, "已删除本地下载", Toast.LENGTH_SHORT).show()
-                                                } else {
-                                                    Toast.makeText(context, "暂无本地下载文件", Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        },
-                                        leadingIcon = { Icon(Icons.Default.DeleteOutline, contentDescription = null) }
-                                    )
-                                }
-                            }
-                        },
-                        modifier = Modifier.combinedClickable(
-                            onClick = {
-                                playOnlineTrack(item, playbackCoordinator, { showNoSourceDialog = true })
-                                onOpenPlayer()
-                            },
-                            onLongClick = { showMenu = true }
-                        )
-                    )
+                searchStateManager.platformStates.forEach { (platform, state) ->
+                    item(key = "header_${platform}") {
+                        Text("${Platform.fromId(platform).displayName} · ${state.items.size} 首", style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(16.dp))
+                    }
+                    items(state.items, key = { "${it.platform}_${it.songId}" }) { item ->
+                        val track = item.toTrack().copy(isFavorite = item.toTrack().id in favoriteIds)
+                        MusicTrackRow(track, isCurrent = current?.id == track.id, isPlaying = playing,
+                            selecting = selecting, selected = track.id in selectedIds, onSelect = { select(track.id) },
+                            onClick = { playbackCoordinator.addOrPlayTrack(track); onOpenPlayer() },
+                            onFavorite = { scope.launch {
+                                if (track.isFavorite) { playlistRepository.toggleFavorite(track.id); message("已取消喜欢") }
+                                else { playlistRepository.addTracks(com.pickaudio.data.db.PickAudioDatabase.FAVORITE_PLAYLIST_ID, listOf(track)); message("已加入我喜欢") }
+                            } },
+                            actions = listOf(
+                                TrackMenuAction("下一首播放") { playbackCoordinator.playNext(track); message("已加入下一首") },
+                                TrackMenuAction("添加到队尾") { playbackCoordinator.addToQueue(track); message("已加入队尾") },
+                                TrackMenuAction("加入歌单") { playlistTracks = listOf(track) },
+                                TrackMenuAction("下载歌曲") { downloadTracks = listOf(track) }
+                            ))
+                    }
+                    item(key = "status_${platform}") {
+                        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                            if (state.loading) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("正在加载${Platform.fromId(platform).displayName}…") }
+                            else if (state.error != null) {
+                                Text(state.error, color = MaterialTheme.colorScheme.error)
+                                TextButton(onClick = { searchStateManager.loadMore(platform) }) { Text("重试此平台") }
+                            } else if (state.items.isEmpty()) Text("没有找到匹配歌曲，可尝试更短的歌名或歌手名。")
+                            else if (state.hasMore) OutlinedButton(onClick = { searchStateManager.loadMore(platform) }) { Text("加载更多${Platform.fromId(platform).displayName}结果") }
+                            else Text("已显示全部结果", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
             }
         }
     }
-
-    // Download Quality Selection Dialog
-    if (songForDownload != null) {
-        val s = songForDownload!!
-        AlertDialog(
-            onDismissRequest = { songForDownload = null },
-            title = { Text("选择下载音质") },
-            text = {
-                Column {
-                    Text(text = "${s.title} - ${s.artist}", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    s.availableQualities.forEach { q ->
-                        FilledTonalButton(
-                            onClick = {
-                                val trackId = "online_${s.platform}_${s.songId}"
-                                scope.launch {
-                                    downloadCoordinator.enqueueDownload(
-                                        trackId = trackId,
-                                        title = s.title,
-                                        artist = s.artist,
-                                        album = s.album,
-                                        coverUri = s.coverUrl,
-                                        platform = s.platform,
-                                        platformSongId = s.songId,
-                                        quality = q
-                                    )
-                                    Toast.makeText(context, "已加入下载任务", Toast.LENGTH_SHORT).show()
-                                }
-                                songForDownload = null
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                        ) {
-                            Text("下载 $q 音质")
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { songForDownload = null }) { Text("取消") }
-            }
-        )
-    }
-
-    // Add To Playlist Dialog
-    if (songForPlaylist != null) {
-        val s = songForPlaylist!!
-        AlertDialog(
-            onDismissRequest = { songForPlaylist = null },
-            title = { Text("加入歌单") },
-            text = {
-                val userPlaylists = playlists
-                if (userPlaylists.isEmpty()) {
-                    Text("暂无歌单")
-                } else {
-                    LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
-                        items(userPlaylists) { pl ->
-                            ListItem(
-                                leadingContent = {
-                                    Icon(
-                                        imageVector = if (pl.id == PickAudioDatabase.FAVORITE_PLAYLIST_ID) Icons.Default.Favorite else Icons.AutoMirrored.Filled.QueueMusic,
-                                        contentDescription = null,
-                                        tint = if (pl.id == PickAudioDatabase.FAVORITE_PLAYLIST_ID) Color(0xFFFF4081) else MaterialTheme.colorScheme.primary
-                                    )
-                                },
-                                headlineContent = { Text(pl.name) },
-                                modifier = Modifier.clickable {
-                                    scope.launch {
-                                        try {
-                                            val trackId = "online_${s.platform}_${s.songId}"
-                                            val track = com.pickaudio.data.model.Track(
-                                                id = trackId,
-                                                title = s.title,
-                                                artist = s.artist,
-                                                album = s.album,
-                                                durationMs = s.durationMs,
-                                                coverUri = s.coverUrl,
-                                                platform = s.platform,
-                                                platformSongId = s.songId
-                                            )
-                                            playlistRepository.ensureTrackAndAddToPlaylist(pl.id, track)
-                                            Toast.makeText(context, "已添加到「${pl.name}」", Toast.LENGTH_SHORT).show()
-                                        } catch (e: Exception) {
-                                            Toast.makeText(context, "添加失败: ${e.message}", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                    songForPlaylist = null
-                                }
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { songForPlaylist = null }) { Text("取消") }
-            }
-        )
-    }
-
-    // Guide Dialog when no source configured
-    if (showNoSourceDialog) {
-        AlertDialog(
-            onDismissRequest = { showNoSourceDialog = false },
-            title = { Text("未配置音乐源") },
-            text = { Text("在线播放与下载需要先导入并启用兼容的 LX 自定义音源脚本。是否前往音乐源管理？") },
-            confirmButton = {
-                Button(onClick = {
-                    showNoSourceDialog = false
-                    onNavigateToSourceManager()
-                }) {
-                    Text("前往配置")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showNoSourceDialog = false }) { Text("稍后") }
-            }
-        )
-    }
-}
-
-private fun playOnlineTrack(
-    item: SearchSongItem,
-    coordinator: PlaybackCoordinator,
-    onNoSource: () -> Unit
-) {
-    val trackId = "online_${item.platform}_${item.songId}"
-    val track = Track(
-        id = trackId,
-        title = item.title,
-        artist = item.artist,
-        album = item.album,
-        durationMs = item.durationMs,
-        coverUri = item.coverUrl,
-        platform = item.platform,
-        platformSongId = item.songId
-    )
-    coordinator.setQueueAndPlay(listOf(track), 0)
+    playlistTracks?.let { PlaylistPickerDialog(it, playlistRepository, { playlistTracks = null }, { message("已加入「$it」") }) }
+    downloadTracks?.let { DownloadQualityDialog(it, downloadCoordinator, sourceManager, userPreferences, { downloadTracks = null }, onNavigateToSourceManager, { message("已加入下载，进度可在下载管理查看") }) }
 }

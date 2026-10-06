@@ -3,7 +3,8 @@ package com.pickaudio.ui.screens
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -12,233 +13,98 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
-import com.pickaudio.data.db.PickAudioDatabase
+import coil.compose.AsyncImage
 import com.pickaudio.data.db.PlaylistEntity
 import com.pickaudio.data.repository.PlaylistRepository
+import com.pickaudio.ui.components.ReorderHandle
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlaylistsScreen(
-    playlistRepository: PlaylistRepository,
-    onPlaylistClick: (String, String) -> Unit,
+    playlistRepository: PlaylistRepository, onPlaylistClick: (String, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
     val playlists by playlistRepository.getAllPlaylists().collectAsState(initial = emptyList())
-    var showCreateDialog by remember { mutableStateOf(false) }
-    var playlistToRename by remember { mutableStateOf<PlaylistEntity?>(null) }
-    var playlistToDelete by remember { mutableStateOf<PlaylistEntity?>(null) }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("歌单", fontWeight = FontWeight.Bold) },
-                actions = {
-                    IconButton(onClick = { showCreateDialog = true }) {
-                        Icon(Icons.Default.Add, contentDescription = "新建歌单")
-                    }
+    val summaries by playlistRepository.getPlaylistSummaries().collectAsState(initial = emptyMap())
+    val state = rememberLazyListState()
+    val snack = remember { SnackbarHostState() }
+    var query by remember { mutableStateOf("") }
+    var ordered by remember { mutableStateOf<List<PlaylistEntity>>(emptyList()) }
+    var dragging by remember { mutableStateOf(false) }
+    var edit by remember { mutableStateOf<PlaylistEntity?>(null) }
+    var creating by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<PlaylistEntity?>(null) }
+    LaunchedEffect(playlists) { if (!dragging) ordered = playlists.filter { !it.isSystem } }
+    val system = playlists.filter { it.isSystem }
+    val shown = (system + ordered).filter { query.isBlank() || it.name.contains(query, true) }
+    Scaffold(topBar = {
+        TopAppBar(title = { Text("歌单") }, actions = {
+            TextButton(onClick = { creating = true }) { Icon(Icons.Default.Add, null); Text("新建") }
+        })
+    }, snackbarHost = { SnackbarHost(snack) }, modifier = modifier.fillMaxSize()) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            OutlinedTextField(query, { query = it }, placeholder = { Text("搜索歌单") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(16.dp))
+            LazyColumn(Modifier.weight(1f), state = state) {
+                itemsIndexed(shown, key = { _, playlist -> playlist.id }) { _, playlist ->
+                    var menu by remember(playlist.id) { mutableStateOf(false) }
+                    val summary = summaries[playlist.id]
+                    ListItem(headlineContent = { Text(playlist.name) },
+                        supportingContent = { Text("${summary?.first ?: 0} 首 · ${if (playlist.isSystem) "收藏歌单" else "自建歌单"}") },
+                        leadingContent = {
+                            Box(Modifier.size(52.dp).clip(RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+                                val cover = summary?.second
+                                if (cover != null) AsyncImage(cover, null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                else Icon(if (playlist.isSystem) Icons.Default.Favorite else Icons.Default.QueueMusic, null, tint = MaterialTheme.colorScheme.primary)
+                            }
+                        },
+                        trailingContent = {
+                            if (!playlist.isSystem) Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (query.isBlank()) ReorderHandle(playlist.id, ordered.indexOf(playlist), ordered.size, state, { from, to ->
+                                    dragging = true
+                                    ordered = ordered.toMutableList().apply { add(to, removeAt(from)) }
+                                }, {
+                                    val ids = ordered.map { it.id }
+                                    scope.launch { playlistRepository.reorderPlaylists(ids); dragging = false }
+                                })
+                                Box {
+                                    IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "歌单操作") }
+                                    DropdownMenu(menu, { menu = false }) {
+                                        DropdownMenuItem(text = { Text("重命名") }, onClick = { edit = playlist; menu = false })
+                                        DropdownMenuItem(text = { Text("删除歌单") }, onClick = { deleting = playlist; menu = false })
+                                    }
+                                }
+                            }
+                        }, modifier = Modifier.clickable { onPlaylistClick(playlist.id, playlist.name) })
                 }
-            )
-        },
-        modifier = modifier.fillMaxSize()
-    ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(bottom = 96.dp)
-        ) {
-            // Pinned "我喜欢"
-            item {
-                ListItem(
-                    headlineContent = {
-                        Text("我喜欢", fontWeight = FontWeight.SemiBold)
-                    },
-                    supportingContent = {
-                        Text("默认收藏歌单", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    },
-                    leadingContent = {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onPlaylistClick(PickAudioDatabase.FAVORITE_PLAYLIST_ID, "我喜欢") },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Surface(
-                                color = Color(0xFFFF4081).copy(alpha = 0.15f),
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.Favorite, contentDescription = null, tint = Color(0xFFFF4081))
-                                }
-                            }
-                        }
-                    },
-                    modifier = Modifier.clickable {
-                        onPlaylistClick(PickAudioDatabase.FAVORITE_PLAYLIST_ID, "我喜欢")
-                    }
-                )
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            }
-
-            // User playlists
-            val userPlaylists = playlists.filter { !it.isSystem }
-            items(userPlaylists) { playlist ->
-                var showMenu by remember { mutableStateOf(false) }
-
-                ListItem(
-                    headlineContent = {
-                        Text(playlist.name, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    },
-                    supportingContent = {
-                        Text("自建歌单", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    },
-                    leadingContent = {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(8.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.primaryContainer,
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        Icons.Default.QueueMusic,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onPrimaryContainer
-                                    )
-                                }
-                            }
-                        }
-                    },
-                    trailingContent = {
-                        Box {
-                            IconButton(onClick = { showMenu = true }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "更多")
-                            }
-                            DropdownMenu(
-                                expanded = showMenu,
-                                onDismissRequest = { showMenu = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("重命名") },
-                                    onClick = {
-                                        playlistToRename = playlist
-                                        showMenu = false
-                                    },
-                                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("删除歌单", color = MaterialTheme.colorScheme.error) },
-                                    onClick = {
-                                        playlistToDelete = playlist
-                                        showMenu = false
-                                    },
-                                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) }
-                                )
-                            }
-                        }
-                    },
-                    modifier = Modifier.clickable { onPlaylistClick(playlist.id, playlist.name) }
-                )
+                if (shown.isEmpty()) item { Text("没有匹配歌单", modifier = Modifier.padding(24.dp)) }
             }
         }
     }
-
-    // Create Playlist Dialog
-    if (showCreateDialog) {
-        var name by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showCreateDialog = false },
-            title = { Text("新建歌单") },
-            text = {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    placeholder = { Text("请输入歌单名称") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (name.isNotBlank()) {
-                            scope.launch { playlistRepository.createPlaylist(name) }
-                            showCreateDialog = false
-                        }
-                    }
-                ) {
-                    Text("创建")
+    if (creating || edit != null) {
+        var name by remember(edit, creating) { mutableStateOf(edit?.name.orEmpty()) }
+        var error by remember { mutableStateOf<String?>(null) }
+        var busy by remember { mutableStateOf(false) }
+        AlertDialog(onDismissRequest = { creating = false; edit = null }, title = { Text(if (creating) "新建歌单" else "重命名歌单") },
+            text = { Column { OutlinedTextField(name, { name = it }, label = { Text("歌单名称") }, singleLine = true); error?.let { Text(it, color = MaterialTheme.colorScheme.error) } } },
+            confirmButton = { Button(enabled = name.isNotBlank() && !busy, onClick = {
+                val id = edit?.id
+                busy = true
+                scope.launch {
+                    try {
+                        if (id == null) playlistRepository.createPlaylist(name) else playlistRepository.renamePlaylist(id, name)
+                        creating = false; edit = null
+                    } catch (e: Exception) { error = e.message; busy = false }
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreateDialog = false }) { Text("取消") }
-            }
-        )
+            }) { Text(if (creating) "创建" else "保存") } },
+            dismissButton = { TextButton(onClick = { creating = false; edit = null }, enabled = !busy) { Text("取消") } })
     }
-
-    // Rename Dialog
-    if (playlistToRename != null) {
-        var name by remember { mutableStateOf(playlistToRename!!.name) }
-        AlertDialog(
-            onDismissRequest = { playlistToRename = null },
-            title = { Text("重命名歌单") },
-            text = {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (name.isNotBlank()) {
-                            scope.launch { playlistRepository.renamePlaylist(playlistToRename!!.id, name) }
-                            playlistToRename = null
-                        }
-                    }
-                ) {
-                    Text("确定")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { playlistToRename = null }) { Text("取消") }
-            }
-        )
-    }
-
-    // Delete Confirm Dialog
-    if (playlistToDelete != null) {
-        AlertDialog(
-            onDismissRequest = { playlistToDelete = null },
-            title = { Text("确认删除") },
-            text = { Text("确定要删除歌单「${playlistToDelete!!.name}」吗？歌单内的本地音频文件将保留。") },
-            confirmButton = {
-                Button(
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                    onClick = {
-                        scope.launch { playlistRepository.deletePlaylist(playlistToDelete!!.id) }
-                        playlistToDelete = null
-                    }
-                ) {
-                    Text("删除")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { playlistToDelete = null }) { Text("取消") }
-            }
-        )
+    deleting?.let { playlist ->
+        AlertDialog(onDismissRequest = { deleting = null }, title = { Text("删除歌单") }, text = { Text("删除「${playlist.name}」的歌单结构，音频文件和收藏保留。") },
+            confirmButton = { TextButton(onClick = { deleting = null; scope.launch { playlistRepository.deletePlaylist(playlist.id); snack.showSnackbar("歌单已删除") } }) { Text("删除", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } })
     }
 }

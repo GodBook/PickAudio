@@ -12,7 +12,10 @@ data class Track(
     val isAvailable: Boolean = true,
     val isFavorite: Boolean = false,
     val platform: String? = null,
-    val platformSongId: String? = null
+    val platformSongId: String? = null,
+    val folderName: String = "",
+    val sourceType: String = "",
+    val createdAt: Long = 0L
 )
 
 enum class PlaybackMode(val displayName: String) {
@@ -77,3 +80,21 @@ enum class ThemeMode(val label: String) {
     LIGHT("浅色"),
     DARK("深色")
 }
+
+enum class PlaybackPhase(val label: String) {
+    IDLE("未播放"), RESOLVING("正在获取播放地址"), BUFFERING("正在缓冲"),
+    READY("已就绪"), PLAYING("正在播放"), PAUSED("已暂停"), ERROR("播放失败"),
+    CHOOSE_VERSION("请选择歌曲版本")
+}
+
+data class PlaybackUiState(
+    val phase: PlaybackPhase = PlaybackPhase.IDLE,
+    val message: String? = null,
+    val requestedQuality: String? = null,
+    val actualQuality: String? = null
+)
+
+fun SearchSongItem.toTrack() = Track(
+    id = "online_${platform}_${songId}", title = title, artist = artist, album = album,
+    durationMs = durationMs, coverUri = coverUrl, platform = platform, platformSongId = songId
+)

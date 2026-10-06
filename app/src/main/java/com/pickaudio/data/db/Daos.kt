@@ -14,10 +14,10 @@ interface TrackDao {
     @Query("SELECT * FROM tracks WHERE title LIKE '%' || :query || '%' OR artist LIKE '%' || :query || '%' OR album LIKE '%' || :query || '%'")
     fun searchTracks(query: String): Flow<List<TrackEntity>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertOrUpdate(track: TrackEntity)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertOrUpdateAll(tracks: List<TrackEntity>)
 
     @Delete
@@ -32,6 +32,8 @@ interface TrackDao {
 
 @Dao
 interface LocalAssetDao {
+    @Query("SELECT * FROM local_assets")
+    fun getAllAssets(): Flow<List<LocalAssetEntity>>
     @Query("SELECT * FROM local_assets WHERE trackId = :trackId")
     suspend fun getAssetsForTrack(trackId: String): List<LocalAssetEntity>
 
@@ -53,6 +55,8 @@ interface LocalAssetDao {
 
 @Dao
 interface OnlineRefDao {
+    @Query("SELECT * FROM online_refs")
+    fun getAllRefs(): Flow<List<OnlineRefEntity>>
     @Query("SELECT * FROM online_refs WHERE platform = :platform AND platformSongId = :songId LIMIT 1")
     suspend fun getByPlatformId(platform: String, songId: String): OnlineRefEntity?
 
@@ -68,13 +72,20 @@ interface OnlineRefDao {
 
 @Dao
 interface PlaylistDao {
+    @Query("SELECT * FROM playlist_tracks ORDER BY sortOrder ASC")
+    fun getAllMembers(): Flow<List<PlaylistTrackEntity>>
+    @Query("UPDATE playlist_tracks SET sortOrder = :position WHERE playlistId = :playlistId AND trackId = :trackId")
+    suspend fun updateTrackOrder(playlistId: String, trackId: String, position: Int)
+
+    @Query("UPDATE playlists SET sortOrder = :position WHERE id = :id")
+    suspend fun updatePlaylistOrder(id: String, position: Int)
     @Query("SELECT * FROM playlists ORDER BY sortOrder ASC, createdAt ASC")
     fun getAllPlaylists(): Flow<List<PlaylistEntity>>
 
     @Query("SELECT * FROM playlists WHERE id = :id LIMIT 1")
     suspend fun getPlaylistById(id: String): PlaylistEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertOrUpdate(playlist: PlaylistEntity)
 
     @Query("DELETE FROM playlists WHERE id = :id AND isSystem = 0")
@@ -101,6 +112,8 @@ interface PlaylistDao {
 
 @Dao
 interface FavoriteDao {
+    @Query("UPDATE favorites SET addedAt = :position WHERE trackId = :trackId")
+    suspend fun updateOrder(trackId: String, position: Long)
     @Query("SELECT t.* FROM tracks t INNER JOIN favorites f ON t.id = f.trackId ORDER BY f.addedAt DESC")
     fun getFavoriteTracks(): Flow<List<TrackEntity>>
 
@@ -140,6 +153,8 @@ interface QueueDao {
 
 @Dao
 interface PlaybackDao {
+    @Query("DELETE FROM playback_snapshot")
+    suspend fun clearSnapshot()
     @Query("SELECT * FROM playback_snapshot WHERE id = 1 LIMIT 1")
     suspend fun getSnapshot(): PlaybackSnapshotEntity?
 
@@ -158,7 +173,7 @@ interface SourceDao {
     @Query("SELECT * FROM source_scripts WHERE scriptHash = :hash LIMIT 1")
     suspend fun getSourceByHash(hash: String): SourceScriptEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertOrUpdate(script: SourceScriptEntity)
 
     @Delete
@@ -176,6 +191,14 @@ interface SourceDao {
 
 @Dao
 interface DownloadDao {
+    @Query("SELECT * FROM download_tasks ORDER BY createdAt ASC")
+    suspend fun getAllTasksSync(): List<DownloadTaskEntity>
+
+    @Query("UPDATE download_tasks SET tempFilePath = :path, resourceEtag = :etag WHERE id = :id")
+    suspend fun updateResource(id: String, path: String, etag: String?)
+
+    @Query("UPDATE download_tasks SET downloadedBytes = :progress, totalBytes = :total, bytesPerSecond = :speed, etaSeconds = :eta, updatedAt = :time WHERE id = :id")
+    suspend fun updateTransfer(id: String, progress: Long, total: Long, speed: Long, eta: Long?, time: Long = System.currentTimeMillis())
     @Query("SELECT * FROM download_tasks ORDER BY createdAt DESC")
     fun getAllTasks(): Flow<List<DownloadTaskEntity>>
 

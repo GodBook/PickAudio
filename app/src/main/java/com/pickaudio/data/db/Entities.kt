@@ -48,7 +48,8 @@ data class LocalAssetEntity(
     val mimeType: String?,
     val format: String?, // mp3, flac, m4a, etc.
     val isAvailable: Boolean = true,
-    val fileHash: String? = null
+    val fileHash: String? = null,
+    val folderName: String = ""
 )
 
 @Entity(
@@ -227,7 +228,12 @@ data class DownloadTaskEntity(
     val targetUri: String? = null,
     val errorMessage: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val actualQuality: String? = null,
+    val bytesPerSecond: Long = 0L,
+    val etaSeconds: Long? = null,
+    val resourceEtag: String? = null,
+    val durationMs: Long = 0L
 )
 
 @Entity(

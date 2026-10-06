@@ -2,281 +2,153 @@ package com.pickaudio.backup
 
 import android.content.Context
 import android.net.Uri
-import com.google.gson.Gson
+import androidx.room.withTransaction
 import com.google.gson.GsonBuilder
 import com.pickaudio.data.db.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import androidx.room.withTransaction
-import java.io.*
-import java.util.UUID
-import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
-import java.util.zip.ZipOutputStream
+import com.pickaudio.data.preferences.UserPreferences
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
+import java.security.MessageDigest
+import java.util.zip.*
 
 data class BackupManifest(
-    val version: Int = 1,
-    val exportedAt: Long = System.currentTimeMillis(),
-    val appVersion: String = "1.0.0",
-    val playlists: List<BackupPlaylist>,
-    val favorites: List<String>, // list of trackIds
-    val tracks: List<BackupTrack>,
-    val lyrics: List<BackupLyric>,
-    val sourceDescriptors: List<BackupSourceDescriptor>
+    val version: Int = 2, val exportedAt: Long = System.currentTimeMillis(), val appVersion: String = "1.2.0",
+    val playlists: List<BackupPlaylist>, val favorites: List<String>, val tracks: List<BackupTrack>,
+    val lyrics: List<BackupLyric>, val sourceDescriptors: List<BackupSourceDescriptor>,
+    val settings: Map<String, String>? = null
 )
+data class BackupPlaylist(val id: String, val name: String, val sortOrder: Int, val trackIds: List<String>)
+data class BackupTrack(val id: String, val title: String, val artist: String, val album: String, val durationMs: Long, val platform: String? = null, val platformSongId: String? = null)
+data class BackupLyric(val trackId: String, val offsetMs: Long, val content: String, val sourceType: String? = null)
+data class BackupSourceDescriptor(val name: String, val version: String, val scriptHash: String)
+data class ExportSummary(val playlists: Int, val favorites: Int, val tracks: Int, val lyrics: Int)
+data class RestoreReport(val addedTracks: Int, val mergedTracks: Int, val newPlaylists: Int, val mergedPlaylists: Int,
+    val favorites: Int, val lyrics: Int, val settingsRestored: Boolean, val missingLocalTracks: List<BackupTrack>, val missingSources: List<String>)
 
-data class BackupPlaylist(
-    val id: String,
-    val name: String,
-    val sortOrder: Int,
-    val trackIds: List<String>
-)
+class BackupManager(private val context: Context, private val database: PickAudioDatabase) {
+    private val gson = GsonBuilder().setPrettyPrinting().create()
+    private val preferences = UserPreferences(context)
+    private fun checksum(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
-data class BackupTrack(
-    val id: String,
-    val title: String,
-    val artist: String,
-    val album: String,
-    val durationMs: Long,
-    val platform: String? = null,
-    val platformSongId: String? = null
-)
-
-data class BackupLyric(
-    val trackId: String,
-    val offsetMs: Long,
-    val content: String
-)
-
-data class BackupSourceDescriptor(
-    val name: String,
-    val version: String,
-    val scriptHash: String
-)
-
-class BackupManager(
-    private val context: Context,
-    private val database: PickAudioDatabase
-) {
-    private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
-
-    suspend fun exportBackup(targetUri: Uri): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val trackDao = database.trackDao()
-            val playlistDao = database.playlistDao()
-            val favoriteDao = database.favoriteDao()
-            val lyricDao = database.lyricDao()
-            val sourceDao = database.sourceDao()
-            val onlineRefDao = database.onlineRefDao()
-
-            val allPlaylists = database.playlistDao().getAllPlaylists()
-            // Collect snapshot
-            val rawPlaylists = database.runInTransaction<List<BackupPlaylist>> {
-                // SQLite raw query or sync DAO
-                val list = mutableListOf<BackupPlaylist>()
-                val cursor = database.query("SELECT * FROM playlists WHERE isSystem = 0", null)
-                while (cursor.moveToNext()) {
-                    val pId = cursor.getString(cursor.getColumnIndexOrThrow("id"))
-                    val pName = cursor.getString(cursor.getColumnIndexOrThrow("name"))
-                    val pOrder = cursor.getInt(cursor.getColumnIndexOrThrow("sortOrder"))
-
-                    val tCursor = database.query("SELECT trackId FROM playlist_tracks WHERE playlistId = '$pId' ORDER BY sortOrder ASC", null)
-                    val tIds = mutableListOf<String>()
-                    while (tCursor.moveToNext()) {
-                        tIds.add(tCursor.getString(0))
-                    }
-                    tCursor.close()
-                    list.add(BackupPlaylist(pId, pName, pOrder, tIds))
-                }
-                cursor.close()
-                list
+    suspend fun export(uri: Uri): ExportSummary = withContext(Dispatchers.IO) {
+        val settings = preferences.exportSettings()
+        val manifest = database.withTransaction {
+            val members = database.playlistDao().getAllMembers().first()
+            val refs = database.onlineRefDao().getAllRefs().first().associateBy { it.trackId }
+            val playlists = database.playlistDao().getAllPlaylists().first().filter { !it.isSystem }.map {
+                BackupPlaylist(it.id, it.name, it.sortOrder, members.filter { member -> member.playlistId == it.id }.sortedBy { member -> member.sortOrder }.map { member -> member.trackId })
             }
-
-            val rawFavorites = mutableListOf<String>()
-            val favCursor = database.query("SELECT trackId FROM favorites", null)
-            while (favCursor.moveToNext()) {
-                rawFavorites.add(favCursor.getString(0))
+            val tracks = database.trackDao().getAllTracks().first().map {
+                val ref = refs[it.id]
+                BackupTrack(it.id, it.title, it.artist, it.album, it.durationMs, ref?.platform, ref?.platformSongId)
             }
-            favCursor.close()
-
-            val rawTracks = mutableListOf<BackupTrack>()
-            val trackCursor = database.query("SELECT id, title, artist, album, durationMs FROM tracks", null)
-            while (trackCursor.moveToNext()) {
-                val tId = trackCursor.getString(0)
-                val tTitle = trackCursor.getString(1)
-                val tArtist = trackCursor.getString(2)
-                val tAlbum = trackCursor.getString(3)
-                val tDur = trackCursor.getLong(4)
-
-                val ref = onlineRefDao.getByTrackId(tId)
-                rawTracks.add(
-                    BackupTrack(
-                        id = tId,
-                        title = tTitle,
-                        artist = tArtist,
-                        album = tAlbum,
-                        durationMs = tDur,
-                        platform = ref?.platform,
-                        platformSongId = ref?.platformSongId
-                    )
-                )
-            }
-            trackCursor.close()
-
-            val rawLyrics = mutableListOf<BackupLyric>()
-            val lrcCursor = database.query("SELECT trackId, offsetMs, content FROM lyric_records", null)
-            while (lrcCursor.moveToNext()) {
-                rawLyrics.add(
-                    BackupLyric(
-                        trackId = lrcCursor.getString(0),
-                        offsetMs = lrcCursor.getLong(1),
-                        content = lrcCursor.getString(2)
-                    )
-                )
-            }
-            lrcCursor.close()
-
-            val rawSources = mutableListOf<BackupSourceDescriptor>()
-            val srcCursor = database.query("SELECT name, version, scriptHash FROM source_scripts", null)
-            while (srcCursor.moveToNext()) {
-                rawSources.add(
-                    BackupSourceDescriptor(
-                        name = srcCursor.getString(0),
-                        version = srcCursor.getString(1),
-                        scriptHash = srcCursor.getString(2)
-                    )
-                )
-            }
-            srcCursor.close()
-
-            val manifest = BackupManifest(
-                playlists = rawPlaylists,
-                favorites = rawFavorites,
-                tracks = rawTracks,
-                lyrics = rawLyrics,
-                sourceDescriptors = rawSources
-            )
-
-            val manifestJson = gson.toJson(manifest)
-
-            context.contentResolver.openOutputStream(targetUri)?.use { out ->
-                ZipOutputStream(BufferedOutputStream(out)).use { zos ->
-                    val entry = ZipEntry("manifest.json")
-                    zos.putNextEntry(entry)
-                    zos.write(manifestJson.toByteArray(Charsets.UTF_8))
-                    zos.closeEntry()
-                }
-            }
-            true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
+            val lyrics = tracks.mapNotNull { database.lyricDao().getLyricForTrack(it.id) }.map { BackupLyric(it.trackId, it.offsetMs, it.content, it.sourceType) }
+            val sources = database.sourceDao().getAllSources().first().map { BackupSourceDescriptor(it.name, it.version, it.scriptHash) }
+            BackupManifest(playlists = playlists, favorites = database.favoriteDao().getAllFavoriteTrackIds().first(),
+                tracks = tracks, lyrics = lyrics, sourceDescriptors = sources, settings = settings)
         }
+        val bytes = gson.toJson(manifest).toByteArray(Charsets.UTF_8)
+        val output = context.contentResolver.openOutputStream(uri) ?: error("无法创建备份文件")
+        output.use { out ->
+            ZipOutputStream(out.buffered()).use { zip ->
+                zip.putNextEntry(ZipEntry("manifest.json")); zip.write(bytes); zip.closeEntry()
+                zip.putNextEntry(ZipEntry("manifest.sha256")); zip.write(checksum(bytes).toByteArray(Charsets.UTF_8)); zip.closeEntry()
+            }
+        }
+        ExportSummary(manifest.playlists.size, manifest.favorites.size, manifest.tracks.size, manifest.lyrics.size)
     }
 
-    suspend fun importBackup(sourceUri: Uri): Boolean = withContext(Dispatchers.IO) {
-        try {
-            var manifestJson: String? = null
-            context.contentResolver.openInputStream(sourceUri)?.use { inStream ->
-                ZipInputStream(BufferedInputStream(inStream)).use { zis ->
-                    var entry = zis.nextEntry
-                    while (entry != null) {
-                        if (entry.name == "manifest.json") {
-                            manifestJson = zis.bufferedReader(Charsets.UTF_8).readText()
-                            break
-                        }
-                        zis.closeEntry()
-                        entry = zis.nextEntry
-                    }
-                }
+    suspend fun inspect(uri: Uri): BackupManifest = withContext(Dispatchers.IO) {
+        var manifest: ByteArray? = null
+        var expectedHash: String? = null
+        var expanded = 0
+        val input = context.contentResolver.openInputStream(uri) ?: error("无法读取备份文件")
+        ZipInputStream(input.buffered()).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+                require(entry.name in setOf("manifest.json", "manifest.sha256") && !entry.isDirectory) { "备份包含不支持的文件" }
+                val bytes = zip.readNBytes(16 * 1024 * 1024 + 1)
+                expanded += bytes.size
+                require(expanded <= 16 * 1024 * 1024) { "备份解压后超过 16MB，请分批整理后备份" }
+                if (entry.name == "manifest.json") { require(manifest == null) { "备份清单重复" }; manifest = bytes }
+                else { require(expectedHash == null) { "备份校验重复" }; expectedHash = String(bytes, Charsets.UTF_8).trim() }
+                zip.closeEntry()
+                entry = zip.nextEntry
             }
+        }
+        val bytes = manifest ?: error("备份缺少清单")
+        val parsed = gson.fromJson(String(bytes, Charsets.UTF_8), BackupManifest::class.java) ?: error("备份清单无效")
+        validate(parsed)
+        if (parsed.version >= 2) require(expectedHash != null) { "备份缺少完整性校验" }
+        expectedHash?.let { require(it == checksum(bytes)) { "备份校验失败，文件可能已损坏" } }
+        parsed
+    }
 
-            if (manifestJson.isNullOrEmpty()) return@withContext false
-            val manifest = gson.fromJson(manifestJson, BackupManifest::class.java) ?: return@withContext false
+    fun validate(manifest: BackupManifest) {
+        require(manifest.version in 1..2) { "暂不支持此备份版本" }
+        val tracks = requireNotNull(manifest.tracks) { "备份缺少歌曲" }
+        require(tracks.size <= 100000 && tracks.all { it.id.isNotBlank() && it.title.isNotBlank() }) { "备份歌曲清单无效" }
+        val ids = tracks.map { it.id }.toSet()
+        require(ids.size == tracks.size) { "备份包含重复歌曲编号" }
+        requireNotNull(manifest.playlists).forEach { require(it.name.isNotBlank() && it.id.isNotBlank() && it.trackIds.all { id -> id in ids }) { "歌单引用了缺失歌曲" } }
+        require(requireNotNull(manifest.favorites).all { it in ids }) { "收藏引用了缺失歌曲" }
+        require(requireNotNull(manifest.lyrics).all { it.trackId in ids }) { "歌词引用了缺失歌曲" }
+    }
 
-            val trackDao = database.trackDao()
-            val playlistDao = database.playlistDao()
-            val favoriteDao = database.favoriteDao()
-            val lyricDao = database.lyricDao()
-            val onlineRefDao = database.onlineRefDao()
-
+    suspend fun restore(manifest: BackupManifest, restoreSettings: Boolean): RestoreReport = withContext(Dispatchers.IO) {
+        validate(manifest)
+        val previousSettings = preferences.exportSettings()
+        var added = 0
+        var merged = 0
+        var newPlaylists = 0
+        var mergedPlaylists = 0
+        val mappedIds = mutableMapOf<String, String>()
+        try {
             database.withTransaction {
-                // 1. Restore tracks
-                for (bt in manifest.tracks) {
-                    val existing = trackDao.getTrackById(bt.id)
+                for (song in manifest.tracks) {
+                    val existingRef = if (song.platform != null && song.platformSongId != null) database.onlineRefDao().getByPlatformId(song.platform, song.platformSongId) else null
+                    val id = existingRef?.trackId ?: song.id
+                    mappedIds[song.id] = id
+                    if (database.trackDao().getTrackById(id) == null) {
+                        database.trackDao().insertOrUpdate(TrackEntity(id, song.title, song.artist, song.album, song.durationMs, null))
+                        added++
+                    } else merged++
+                    if (song.platform != null && song.platformSongId != null && existingRef == null)
+                        database.onlineRefDao().insertOrUpdate(OnlineRefEntity(trackId = id, platform = song.platform, platformSongId = song.platformSongId, platformMetadataJson = "{}"))
+                }
+                manifest.favorites.forEach { database.favoriteDao().addFavorite(FavoriteEntity(mappedIds.getValue(it))) }
+                for (playlist in manifest.playlists) {
+                    val existing = database.playlistDao().getPlaylistById(playlist.id)
                     if (existing == null) {
-                        trackDao.insertOrUpdate(
-                            TrackEntity(
-                                id = bt.id,
-                                title = bt.title,
-                                artist = bt.artist,
-                                album = bt.album,
-                                durationMs = bt.durationMs,
-                                coverUri = null
-                            )
-                        )
-                    }
-                    if (bt.platform != null && bt.platformSongId != null) {
-                        val ref = onlineRefDao.getByPlatformId(bt.platform, bt.platformSongId)
-                        if (ref == null) {
-                            onlineRefDao.insertOrUpdate(
-                                OnlineRefEntity(
-                                    trackId = bt.id,
-                                    platform = bt.platform,
-                                    platformSongId = bt.platformSongId,
-                                    platformMetadataJson = "{}"
-                                )
-                            )
-                        }
+                        database.playlistDao().insertOrUpdate(PlaylistEntity(playlist.id, playlist.name, sortOrder = playlist.sortOrder))
+                        newPlaylists++
+                    } else { require(!existing.isSystem) { "备份不能替换系统歌单" }; mergedPlaylists++ }
+                    val members = database.playlistDao().getTracksForPlaylist(playlist.id).first().map { it.id }.toMutableSet()
+                    var order = database.playlistDao().getMaxSortOrder(playlist.id) ?: -1
+                    playlist.trackIds.map { mappedIds.getValue(it) }.forEach { id ->
+                        if (members.add(id)) database.playlistDao().addTrackToPlaylist(PlaylistTrackEntity(playlist.id, id, ++order))
                     }
                 }
-
-                // 2. Restore favorites
-                for (fid in manifest.favorites) {
-                    favoriteDao.addFavorite(FavoriteEntity(trackId = fid))
+                manifest.lyrics.forEach { lyric ->
+                    val id = mappedIds.getValue(lyric.trackId)
+                    if (database.lyricDao().getLyricForTrack(id) == null)
+                        database.lyricDao().insertOrUpdate(LyricRecordEntity(id, lyric.sourceType ?: "BACKUP_RESTORED", lyric.content, lyric.offsetMs))
                 }
-
-                // 3. Restore Playlists
-                for (bp in manifest.playlists) {
-                    val existing = playlistDao.getPlaylistById(bp.id)
-                    val finalId = if (existing == null) bp.id else UUID.randomUUID().toString()
-                    val finalName = if (existing == null) bp.name else "${bp.name} (恢复)"
-
-                    playlistDao.insertOrUpdate(
-                        PlaylistEntity(
-                            id = finalId,
-                            name = finalName,
-                            sortOrder = bp.sortOrder,
-                            isSystem = false
-                        )
-                    )
-                    bp.trackIds.forEachIndexed { index, tId ->
-                        playlistDao.addTrackToPlaylist(
-                            PlaylistTrackEntity(
-                                playlistId = finalId,
-                                trackId = tId,
-                                sortOrder = index
-                            )
-                        )
-                    }
-                }
-
-                // 4. Restore Lyrics
-                for (bl in manifest.lyrics) {
-                    lyricDao.insertOrUpdate(
-                        LyricRecordEntity(
-                            trackId = bl.trackId,
-                            sourceType = "BACKUP_RESTORED",
-                            content = bl.content,
-                            offsetMs = bl.offsetMs
-                        )
-                    )
-                }
+                if (restoreSettings && manifest.settings != null) preferences.restoreSettings(manifest.settings)
             }
-            true
         } catch (e: Exception) {
-            e.printStackTrace()
-            false
+            if (restoreSettings) withContext(NonCancellable) { preferences.restoreSettings(previousSettings) }
+            throw e
         }
+        val missing = manifest.tracks.filter { song ->
+            val id = mappedIds.getValue(song.id)
+            database.localAssetDao().getAssetsForTrack(id).none { it.isAvailable } && database.onlineRefDao().getByTrackId(id) == null
+        }.map { it.copy(id = mappedIds.getValue(it.id)) }
+        val sourceHashes = database.sourceDao().getAllSources().first().map { it.scriptHash }.toSet()
+        RestoreReport(added, merged, newPlaylists, mergedPlaylists, manifest.favorites.size, manifest.lyrics.size,
+            restoreSettings && manifest.settings != null, missing, manifest.sourceDescriptors.orEmpty().filter { it.scriptHash !in sourceHashes }.map { it.name })
     }
+
+    suspend fun exportBackup(uri: Uri): Boolean = runCatching { export(uri) }.isSuccess
+    suspend fun importBackup(uri: Uri): Boolean = runCatching { restore(inspect(uri), false) }.isSuccess
 }

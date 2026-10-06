@@ -13,6 +13,7 @@ object NetEaseSearchAdapter {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.SECONDS)
         .build()
 
     suspend fun search(keyword: String, page: Int = 1, pageSize: Int = 20): List<SearchSongItem> = withContext(Dispatchers.IO) {
@@ -26,8 +27,10 @@ object NetEaseSearchAdapter {
             .build()
 
         val resp = client.newCall(req).execute()
+        check(resp.isSuccessful) { "网易云服务返回 ${resp.code}" }
         val body = resp.body?.string() ?: return@withContext emptyList()
         val root = JsonParser.parseString(body).asJsonObject
+        check(root.get("code")?.asInt == 200) { "网易云搜索服务暂不可用" }
 
         val songsArray = root.getAsJsonObject("result")?.getAsJsonArray("songs") ?: return@withContext emptyList()
         val result = mutableListOf<SearchSongItem>()

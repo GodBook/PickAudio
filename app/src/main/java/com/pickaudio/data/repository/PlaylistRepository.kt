@@ -1,164 +1,128 @@
 package com.pickaudio.data.repository
 
+import androidx.room.withTransaction
 import com.pickaudio.data.db.*
 import com.pickaudio.data.model.Track
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.Dispatchers
 import java.util.UUID
 
 class PlaylistRepository(private val database: PickAudioDatabase) {
     private val playlistDao = database.playlistDao()
     private val favoriteDao = database.favoriteDao()
-    private val localAssetDao = database.localAssetDao()
     private val trackDao = database.trackDao()
 
     fun getAllPlaylists(): Flow<List<PlaylistEntity>> = playlistDao.getAllPlaylists()
+    private fun allTracks(): Flow<List<Track>> = combine(
+        trackDao.getAllTracks(), database.localAssetDao().getAllAssets(), database.onlineRefDao().getAllRefs(), favoriteDao.getAllFavoriteTrackIds()
+    ) { tracks, assets, refs, favorites ->
+        val assetMap = assets.groupBy { it.trackId }
+        val refMap = refs.groupBy { it.trackId }
+        val favSet = favorites.toSet()
+        tracks.map { it.toTrack(assetMap[it.id].orEmpty(), refMap[it.id].orEmpty(), it.id in favSet) }
+    }.flowOn(Dispatchers.Default)
 
-    fun getFavoriteTracks(): Flow<List<Track>> {
-        return favoriteDao.getFavoriteTracks().map { list ->
-            list.map { entity ->
-                val assets = localAssetDao.getAssetsForTrack(entity.id)
-                val localUri = assets.firstOrNull { it.isAvailable }?.uri
-                val platform = if (entity.id.startsWith("online_wy_")) "wy" else if (entity.id.startsWith("online_tx_")) "tx" else null
-                val platformSongId = if (entity.id.startsWith("online_wy_") || entity.id.startsWith("online_tx_")) entity.id.removePrefix("online_wy_").removePrefix("online_tx_") else null
-                Track(
-                    id = entity.id,
-                    title = entity.title,
-                    artist = entity.artist,
-                    album = entity.album,
-                    durationMs = entity.durationMs,
-                    coverUri = entity.coverUri,
-                    trackNumber = entity.trackNumber,
-                    localUri = localUri,
-                    isAvailable = localUri != null,
-                    isFavorite = true,
-                    platform = platform,
-                    platformSongId = platformSongId
-                )
-            }
-        }
+    fun getFavoriteTracks(): Flow<List<Track>> = combine(allTracks(), favoriteDao.getFavoriteTracks()) { tracks, favorites ->
+        val lookup = tracks.associateBy { it.id }
+        favorites.mapNotNull { lookup[it.id] }
     }
 
-    fun getTracksForPlaylist(playlistId: String): Flow<List<Track>> {
-        if (playlistId == PickAudioDatabase.FAVORITE_PLAYLIST_ID) {
-            return getFavoriteTracks()
-        }
-        return combine(playlistDao.getTracksForPlaylist(playlistId), favoriteDao.getAllFavoriteTrackIds()) { list, favIds ->
-            val favSet = favIds.toSet()
-            list.map { entity ->
-                val assets = localAssetDao.getAssetsForTrack(entity.id)
-                val localUri = assets.firstOrNull { it.isAvailable }?.uri
-                val platform = if (entity.id.startsWith("online_wy_")) "wy" else if (entity.id.startsWith("online_tx_")) "tx" else null
-                val platformSongId = if (entity.id.startsWith("online_wy_") || entity.id.startsWith("online_tx_")) entity.id.removePrefix("online_wy_").removePrefix("online_tx_") else null
-                Track(
-                    id = entity.id,
-                    title = entity.title,
-                    artist = entity.artist,
-                    album = entity.album,
-                    durationMs = entity.durationMs,
-                    coverUri = entity.coverUri,
-                    trackNumber = entity.trackNumber,
-                    localUri = localUri,
-                    isAvailable = localUri != null,
-                    isFavorite = favSet.contains(entity.id),
-                    platform = platform,
-                    platformSongId = platformSongId
-                )
-            }
+    fun getTracksForPlaylist(id: String): Flow<List<Track>> {
+        if (id == PickAudioDatabase.FAVORITE_PLAYLIST_ID) return getFavoriteTracks()
+        return combine(allTracks(), playlistDao.getTracksForPlaylist(id)) { tracks, members ->
+            val lookup = tracks.associateBy { it.id }
+            members.mapNotNull { lookup[it.id] }
         }
     }
 
     suspend fun createPlaylist(name: String): String {
+        require(name.isNotBlank()) { "请输入歌单名称" }
         val id = UUID.randomUUID().toString()
-        playlistDao.insertOrUpdate(
-            PlaylistEntity(
-                id = id,
-                name = name.trim(),
-                isSystem = false
-            )
-        )
+        val order = (getAllPlaylists().first().maxOfOrNull { it.sortOrder } ?: 0) + 1
+        playlistDao.insertOrUpdate(PlaylistEntity(id = id, name = name.trim(), sortOrder = order))
         return id
     }
 
-    suspend fun renamePlaylist(playlistId: String, newName: String) {
-        val p = playlistDao.getPlaylistById(playlistId)
-        if (p != null && !p.isSystem) {
-            playlistDao.insertOrUpdate(p.copy(name = newName.trim(), updatedAt = System.currentTimeMillis()))
-        }
+    suspend fun renamePlaylist(id: String, name: String) {
+        require(name.isNotBlank()) { "请输入歌单名称" }
+        val playlist = playlistDao.getPlaylistById(id) ?: return
+        if (!playlist.isSystem) playlistDao.insertOrUpdate(playlist.copy(name = name.trim(), updatedAt = System.currentTimeMillis()))
     }
 
-    suspend fun deletePlaylist(playlistId: String) {
-        playlistDao.deletePlaylist(playlistId)
+    suspend fun createAndAddTracks(name: String, tracks: List<Track>): String = database.withTransaction {
+        val id = createPlaylist(name)
+        addTracks(id, tracks)
+        id
     }
 
-    suspend fun ensureTrackAndAddToPlaylist(playlistId: String, track: Track) {
-        if (trackDao.getTrackById(track.id) == null) {
-            trackDao.insertOrUpdate(
-                TrackEntity(
-                    id = track.id,
-                    title = track.title,
-                    artist = track.artist,
-                    album = track.album,
-                    durationMs = track.durationMs,
-                    coverUri = track.coverUri,
-                    trackNumber = track.trackNumber
-                )
-            )
-        }
+    suspend fun deletePlaylist(id: String) = playlistDao.deletePlaylist(id)
+
+    private suspend fun ensureTrack(track: Track) {
+        if (trackDao.getTrackById(track.id) == null) trackDao.insertOrUpdate(TrackEntity(
+            track.id, track.title, track.artist, track.album, track.durationMs, track.coverUri, track.trackNumber
+        ))
         val platform = track.platform ?: if (track.id.startsWith("online_wy_")) "wy" else if (track.id.startsWith("online_tx_")) "tx" else null
-        val songId = track.platformSongId ?: track.id.removePrefix("online_wy_").removePrefix("online_tx_")
-        if (platform != null && songId.isNotEmpty()) {
-            if (database.onlineRefDao().getByTrackId(track.id) == null) {
-                database.onlineRefDao().insertOrUpdate(
-                    OnlineRefEntity(
-                        trackId = track.id,
-                        platform = platform,
-                        platformSongId = songId,
-                        platformMetadataJson = "{}"
-                    )
-                )
-            }
-        }
+        val songId = track.platformSongId ?: platform?.let { track.id.removePrefix("online_${it}_") }
+        if (platform != null && !songId.isNullOrEmpty() && database.onlineRefDao().getByTrackId(track.id) == null)
+            database.onlineRefDao().insertOrUpdate(OnlineRefEntity(trackId = track.id, platform = platform, platformSongId = songId, platformMetadataJson = "{}"))
+    }
+
+    suspend fun ensureTrackAndAddToPlaylist(playlistId: String, track: Track) = database.withTransaction {
+        ensureTrack(track)
         addTrackToPlaylist(playlistId, track.id)
     }
 
     suspend fun addTrackToPlaylist(playlistId: String, trackId: String) {
         if (playlistId == PickAudioDatabase.FAVORITE_PLAYLIST_ID) {
-            favoriteDao.addFavorite(FavoriteEntity(trackId = trackId))
+            favoriteDao.addFavorite(FavoriteEntity(trackId))
             return
         }
-        val maxOrder = playlistDao.getMaxSortOrder(playlistId) ?: -1
-        playlistDao.addTrackToPlaylist(
-            PlaylistTrackEntity(
-                playlistId = playlistId,
-                trackId = trackId,
-                sortOrder = maxOrder + 1
-            )
-        )
+        if (playlistDao.getTracksForPlaylist(playlistId).first().any { it.id == trackId }) return
+        val order = (playlistDao.getMaxSortOrder(playlistId) ?: -1) + 1
+        playlistDao.addTrackToPlaylist(PlaylistTrackEntity(playlistId, trackId, order))
     }
 
-    suspend fun removeTrackFromPlaylist(playlistId: String, trackId: String) {
-        if (playlistId == PickAudioDatabase.FAVORITE_PLAYLIST_ID) {
-            favoriteDao.removeFavorite(trackId)
-            return
-        }
-        playlistDao.removeTrackFromPlaylist(playlistId, trackId)
+    suspend fun addTracks(playlistId: String, tracks: List<Track>) = database.withTransaction {
+        tracks.distinctBy { it.id }.forEach { ensureTrackAndAddToPlaylist(playlistId, it) }
     }
 
-    suspend fun toggleFavorite(trackId: String): Boolean {
-        if (trackDao.getTrackById(trackId) == null) {
-            return false
-        }
-        val isFav = favoriteDao.isFavoriteSync(trackId)
-        return if (isFav) {
-            favoriteDao.removeFavorite(trackId)
-            false
-        } else {
-            favoriteDao.addFavorite(FavoriteEntity(trackId = trackId))
-            true
+    suspend fun removeTrackFromPlaylist(playlistId: String, id: String) {
+        if (playlistId == PickAudioDatabase.FAVORITE_PLAYLIST_ID) favoriteDao.removeFavorite(id)
+        else playlistDao.removeTrackFromPlaylist(playlistId, id)
+    }
+
+    suspend fun removeTracks(playlistId: String, ids: List<String>) = database.withTransaction {
+        ids.forEach { removeTrackFromPlaylist(playlistId, it) }
+    }
+
+    suspend fun reorderTracks(playlistId: String, ids: List<String>) = database.withTransaction {
+        ids.forEachIndexed { index, id ->
+            if (playlistId == PickAudioDatabase.FAVORITE_PLAYLIST_ID) favoriteDao.updateOrder(id, System.currentTimeMillis() - index)
+            else playlistDao.updateTrackOrder(playlistId, id, index)
         }
     }
 
-    fun isFavoriteFlow(trackId: String): Flow<Boolean> = favoriteDao.isFavorite(trackId)
+    suspend fun reorderPlaylists(ids: List<String>) = database.withTransaction {
+        ids.forEachIndexed { index, id -> playlistDao.updatePlaylistOrder(id, index + 1) }
+    }
+
+    suspend fun toggleFavorite(id: String): Boolean {
+        if (trackDao.getTrackById(id) == null) return false
+        val favorite = favoriteDao.isFavoriteSync(id)
+        if (favorite) favoriteDao.removeFavorite(id) else favoriteDao.addFavorite(FavoriteEntity(id))
+        return !favorite
+    }
+
+    fun isFavoriteFlow(id: String): Flow<Boolean> = favoriteDao.isFavorite(id)
+
+    fun getPlaylistSummaries(): Flow<Map<String, Pair<Int, String?>>> = combine(
+        playlistDao.getAllPlaylists(), playlistDao.getAllMembers(), allTracks()
+    ) { playlists, members, tracks ->
+        val lookup = tracks.associateBy { it.id }
+        playlists.associate { playlist ->
+            val songs = if (playlist.isSystem) tracks.filter { it.isFavorite }
+                else members.filter { it.playlistId == playlist.id }.mapNotNull { lookup[it.trackId] }
+            playlist.id to (songs.size to songs.firstNotNullOfOrNull { it.coverUri })
+        }
+    }
 }

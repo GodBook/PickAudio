@@ -1,9 +1,9 @@
 {
-  "versionCode": 8,
-  "versionName": "1.1.6",
-  "changelog": "1. 放大桌面图标主体，移除图标周围的黑边。\n2. 更新自适应图标背景，适配圆形、圆角及各分辨率图标。",
-  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.1.6/PickAudio-v1.1.6-release.apk",
-  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.1.6",
-  "apkSize": 54010626,
+  "versionCode": 9,
+  "versionName": "1.2.0",
+  "changelog": "1. 优化界面与大字号布局，统一歌曲列表、来源和播放状态提示。\n2. 统一音乐导入入口，增加进度统计、分类浏览和排序筛选。\n3. 完善歌单与队列批量操作，支持新建并加入、拖动排序和清空撤销。\n4. 优化分平台搜索、播放错误恢复与歌曲版本确认。\n5. 完善歌词缓存、本地 LRC、每首歌校准、字号和翻译设置。\n6. 优化下载进度、批量管理、Wi-Fi 策略和音质校验。\n7. 完善备份预览、增量恢复和分类缓存清理，保留已有数据。\n8. 修复当前版本或旧版被误报为更新的问题。",
+  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.2.0/PickAudio-v1.2.0-release.apk",
+  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.2.0",
+  "apkSize": 54403842,
   "publishTime": "2026-10-06"
 }

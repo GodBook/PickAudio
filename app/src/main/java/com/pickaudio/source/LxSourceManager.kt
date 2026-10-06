@@ -8,8 +8,15 @@ import com.google.gson.JsonParser
 import com.pickaudio.data.db.PickAudioDatabase
 import com.pickaudio.data.db.PlatformSourceSelectionEntity
 import com.pickaudio.data.db.SourceScriptEntity
+import com.pickaudio.data.model.SearchSongItem
+import com.pickaudio.online.AlternativeVersionException
+import com.pickaudio.online.NetEaseSearchAdapter
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -60,6 +67,41 @@ class LxSourceManager(
     // Active runtime instances per source ID
     private val activeEngines = ConcurrentHashMap<String, QuickJsEngine>()
     private val sourceCapabilities = ConcurrentHashMap<String, Map<String, SourcePlatformCapability>>()
+    private val engineLocks = ConcurrentHashMap<String, Mutex>()
+    private val _sourceHealth = MutableStateFlow<Map<String, String>>(emptyMap())
+    val sourceHealth = _sourceHealth.asStateFlow()
+
+    fun capabilitiesForSource(source: SourceScriptEntity): Map<String, SourcePlatformCapability> =
+        runCatching {
+            val type = object : com.google.gson.reflect.TypeToken<Map<String, SourcePlatformCapability>>() {}.type
+            gson.fromJson<Map<String, SourcePlatformCapability>>(source.capabilitiesJson, type) ?: emptyMap()
+        }.getOrDefault(emptyMap())
+
+    suspend fun supportedQualities(platform: String): List<String> {
+        ensureBuiltinSources()
+        val selected = sourceDao.getSelectionForPlatform(platform)
+        val id = selected?.sourceId ?: if (selected == null) "builtin_aggregate" else return emptyList()
+        val source = sourceDao.getSourceById(id) ?: return emptyList()
+        return if (source.isEnabled) capabilitiesForSource(source)[platform]?.qualities.orEmpty() else emptyList()
+    }
+
+    suspend fun testSource(source: SourceScriptEntity) {
+        _sourceHealth.value = _sourceHealth.value + (source.id to "正在测试")
+        try {
+            if (source.id == "builtin_aggregate") {
+                val results = NetEaseSearchAdapter.search("晴天", pageSize = 1)
+                require(results.isNotEmpty()) { "搜索服务暂时未返回结果" }
+                _sourceHealth.value = _sourceHealth.value + (source.id to "搜索连接正常；歌曲可用性以播放结果为准")
+            } else {
+                testInitialize(source.scriptContent)
+                _sourceHealth.value = _sourceHealth.value + (source.id to "脚本初始化通过；歌曲可用性以播放结果为准")
+            }
+        } catch (e: CancellationException) {
+            _sourceHealth.value = _sourceHealth.value + (source.id to "测试已取消")
+            throw e
+        }
+        catch (e: Exception) { _sourceHealth.value = _sourceHealth.value + (source.id to "测试失败：${e.message}") }
+    }
 
     init {
         scope.launch(Dispatchers.IO) {
@@ -156,6 +198,10 @@ class LxSourceManager(
     }
 
     suspend fun selectSourceForPlatform(platform: String, sourceId: String?) {
+        if (sourceId != null) {
+            val source = sourceDao.getSourceById(sourceId) ?: error("音源不存在")
+            require(capabilitiesForSource(source).containsKey(platform)) { "该音源不支持此平台" }
+        }
         sourceDao.setPlatformSelection(PlatformSourceSelectionEntity(platform, sourceId))
     }
 
@@ -197,12 +243,10 @@ class LxSourceManager(
             engine.evaluate(code, "source.js")
             engine.executePendingJobs()
             val result = capabilities.await()
-            engine.close()
             result
-        } catch (e: Exception) {
-            engine.close()
-            throw e
-        }
+        } catch (e: TimeoutCancellationException) {
+            throw IllegalStateException("脚本初始化超过 15 秒，请检查网络或使用兼容的 LX 移动版脚本", e)
+        } finally { engine.close() }
     }
 
     private fun parseInitedSources(dataJson: String): Map<String, SourcePlatformCapability> {
@@ -228,9 +272,10 @@ class LxSourceManager(
         return map
     }
 
-    private fun getOrStartEngine(sourceId: String): QuickJsEngine {
-        return activeEngines.computeIfAbsent(sourceId) {
-            val s = runBlocking { sourceDao.getSourceById(sourceId) }
+    private suspend fun getOrStartEngine(sourceId: String): QuickJsEngine = engineLocks.getOrPut(sourceId) { Mutex() }.withLock {
+        activeEngines[sourceId]?.let { return@withLock it }
+        withTimeout(15000) {
+            val s = sourceDao.getSourceById(sourceId)
                 ?: throw IllegalStateException("未找到音乐源 $sourceId")
             val engine = QuickJsEngine()
             val initedDeferred = CompletableDeferred<Boolean>()
@@ -254,9 +299,13 @@ class LxSourceManager(
             }
 
             engine.registerHostBridge(callback)
-            engine.evaluate(s.scriptContent, "${s.name}.js")
-            engine.executePendingJobs()
-            engine
+            try {
+                engine.evaluate(s.scriptContent, "${s.name}.js")
+                engine.executePendingJobs()
+                initedDeferred.await()
+                activeEngines[sourceId] = engine
+                engine
+            } catch (e: Exception) { engine.close(); throw e }
         }
     }
 
@@ -325,27 +374,27 @@ class LxSourceManager(
         try {
             val builtinId = "builtin_aggregate"
             val existing = sourceDao.getSourceById(builtinId)
-            if (existing == null) {
+            if (existing == null || existing.version != "1.2.0") {
                 val entity = SourceScriptEntity(
                     id = builtinId,
                     name = "拾音官方聚合音源",
-                    version = "1.1.0",
+                    version = "1.2.0",
                     author = "PickAudio Official",
-                    description = "内置多线路高品质聚合解析服务，支持网易云与QQ音乐在线高品质试听与下载",
+                    description = "网易云多线路播放；QQ 原版本不可用时提供其他平台候选版本，需手动确认。内置线路提供标准与高品质，不宣称无损。",
                     homepage = "https://github.com/GodBook/PickAudio",
                     scriptHash = "builtin_aggregate_v110",
                     scriptContent = "// PickAudio Built-in Multi-Engine Aggregator",
-                    capabilitiesJson = """{"wy":{"platform":"wy","name":"网易云","actions":["musicUrl"],"qualities":["128k","320k","flac"]},"tx":{"platform":"tx","name":"QQ音乐","actions":["musicUrl"],"qualities":["128k","320k","flac"]}}""",
+                    capabilitiesJson = """{"wy":{"platform":"wy","name":"网易云","actions":["musicUrl"],"qualities":["128k","320k"]},"tx":{"platform":"tx","name":"QQ音乐候选版本","actions":["musicUrl"],"qualities":["128k","320k"]}}""",
                     isEnabled = true
                 )
                 sourceDao.insertOrUpdate(entity)
             }
             val wySel = sourceDao.getSelectionForPlatform("wy")
-            if (wySel?.sourceId == null) {
+            if (wySel == null) {
                 selectSourceForPlatform("wy", builtinId)
             }
             val txSel = sourceDao.getSelectionForPlatform("tx")
-            if (txSel?.sourceId == null) {
+            if (txSel == null) {
                 selectSourceForPlatform("tx", builtinId)
             }
         } catch (e: Exception) {
@@ -363,7 +412,9 @@ class LxSourceManager(
         val selection = sourceDao.getSelectionForPlatform(platform)
         val sourceId = selection?.sourceId
 
-        // If no source is selected or source is builtin_aggregate, use builtin resolver
+        if (selection != null && sourceId == null) error("未配置音乐源，请选择支持此平台的音源后重试")
+        val supported = supportedQualities(platform)
+        require(quality in supported) { "当前音源不支持所选音质，请选择：${supported.joinToString()}" }
         if (sourceId == null || sourceId == "builtin_aggregate") {
             return@withContext resolveBuiltinMusicUrl(platform, songId, quality, title, artist)
         }
@@ -392,7 +443,7 @@ class LxSourceManager(
                 })()
             """.trimIndent()
 
-            val resJson = engine.evaluate(evalJs, "<resolve>") ?: throw IllegalStateException("解析返回空值")
+            val resJson = engine.evaluateAsync(evalJs, "<resolve>")
             val parsed = JsonParser.parseString(resJson)
             val url = if (parsed.isJsonPrimitive) {
                 parsed.asString
@@ -404,12 +455,14 @@ class LxSourceManager(
             if (url.isNotBlank() && (url.startsWith("http://") || url.startsWith("https://"))) {
                 return@withContext url
             }
-        } catch (e: Exception) {
-            Log.w("LxSourceManager", "Custom script resolve failed for $platform, fallback to built-in: ${e.message}")
+        } catch (e: TimeoutCancellationException) {
+            throw IllegalStateException("音源解析超过 15 秒，请重试或更换音源", e)
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            _sourceHealth.value = _sourceHealth.value + (sourceId to "最近播放解析失败：${e.message}")
+            throw IllegalStateException("音乐源解析失败，请重试或切换音源：${e.message}", e)
         }
-
-        // Fallback to built-in aggregator
-        resolveBuiltinMusicUrl(platform, songId, quality, title, artist)
+        error("音源没有返回有效地址，请切换音源")
     }
 
     private suspend fun resolveBuiltinMusicUrl(
@@ -422,7 +475,8 @@ class LxSourceManager(
         if (platform == "wy") {
             // Priority 1: GDStudio NetEase API (High Quality 320k / 128k) with quick timeout
             try {
-                val br = if (quality == "flac" || quality == "320k") "320" else "128"
+                require(!quality.startsWith("flac")) { "内置音源不提供已验证的无损音质，请选择支持 FLAC 的自定义源" }
+                val br = if (quality == "320k") "320" else "128"
                 val req = Request.Builder()
                     .url("https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id=$songId&br=$br")
                     .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
@@ -464,7 +518,7 @@ class LxSourceManager(
             // Priority 3: NetEase standard outer URL (HTTP 302 stream - rock solid with cross-protocol redirect)
             return "https://music.163.com/song/media/outer/url?id=$songId.mp3"
         } else if (platform == "tx") {
-            // For QQ Music, cross-match NetEase database with song title and artist
+            // Cross-platform recordings are candidates, never silently substituted.
             var queryTitle = title
             var queryArtist = artist
             if (queryTitle.isNullOrBlank()) {
@@ -476,36 +530,8 @@ class LxSourceManager(
             }
 
             if (!queryTitle.isNullOrBlank()) {
-                val cleanTitle = queryTitle.replace(Regex("""\s*[\(（].*?[\)）]\s*"""), "").trim()
-                val queries = listOf(
-                    "$queryTitle ${queryArtist ?: ""}".trim(),
-                    if (cleanTitle != queryTitle && cleanTitle.isNotEmpty()) "$cleanTitle ${queryArtist ?: ""}".trim() else null,
-                    queryTitle.trim(),
-                    if (cleanTitle != queryTitle && cleanTitle.isNotEmpty()) cleanTitle else null
-                ).filterNotNull().distinct()
-
-                for (q in queries) {
-                    try {
-                        val searchKeyword = java.net.URLEncoder.encode(q, "UTF-8")
-                        val searchUrl = "https://music.163.com/api/search/get/web?csrf_token=&s=$searchKeyword&type=1&offset=0&total=true&limit=1"
-                        val searchReq = Request.Builder()
-                            .url(searchUrl)
-                            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                            .build()
-                        val resp = quickHttpClient.newCall(searchReq).execute()
-                        if (resp.isSuccessful) {
-                            val body = resp.body?.string() ?: ""
-                            val root = JsonParser.parseString(body).asJsonObject
-                            val songs = root.getAsJsonObject("result")?.getAsJsonArray("songs")
-                            if (songs != null && songs.size() > 0) {
-                                val matchedSongId = songs[0].asJsonObject.get("id").asLong.toString()
-                                return resolveBuiltinMusicUrl("wy", matchedSongId, quality, queryTitle, queryArtist)
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.w("LxSourceManager", "Builtin tx cross-match query '$q' failed: ${e.message}")
-                    }
-                }
+                val candidates = NetEaseSearchAdapter.search("$queryTitle ${queryArtist.orEmpty()}".trim(), pageSize = 10)
+                if (candidates.isNotEmpty()) throw AlternativeVersionException(candidates)
             }
 
             throw IllegalStateException("未找到该 QQ 歌曲的可用播放链接，请在音乐源管理中导入专用音源")

@@ -47,4 +47,11 @@ object AudioCacheManager {
             .setUpstreamDataSourceFactory(defaultDataSourceFactory)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
+
+    fun size(context: Context): Long = getCache(context).cacheSpace
+
+    fun clear(context: Context) {
+        val cache = getCache(context)
+        cache.keys.toList().forEach { cache.removeResource(it) }
+    }
 }

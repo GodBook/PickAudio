@@ -5,6 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.room.migration.Migration
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -25,7 +26,7 @@ import kotlinx.coroutines.launch
         LyricRecordEntity::class,
         ImportRootEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class PickAudioDatabase : RoomDatabase() {
@@ -43,6 +44,16 @@ abstract class PickAudioDatabase : RoomDatabase() {
 
     companion object {
         const val FAVORITE_PLAYLIST_ID = "favorite"
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE local_assets ADD COLUMN folderName TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE download_tasks ADD COLUMN actualQuality TEXT")
+                db.execSQL("ALTER TABLE download_tasks ADD COLUMN bytesPerSecond INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE download_tasks ADD COLUMN etaSeconds INTEGER")
+                db.execSQL("ALTER TABLE download_tasks ADD COLUMN resourceEtag TEXT")
+                db.execSQL("ALTER TABLE download_tasks ADD COLUMN durationMs INTEGER NOT NULL DEFAULT 0")
+            }
+        }
 
         @Volatile
         private var INSTANCE: PickAudioDatabase? = null
@@ -53,7 +64,7 @@ abstract class PickAudioDatabase : RoomDatabase() {
                     context.applicationContext,
                     PickAudioDatabase::class.java,
                     "pickaudio.db"
-                ).addCallback(object : Callback() {
+                ).addMigrations(MIGRATION_1_2).addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         super.onCreate(db)
                         // Insert system favorite playlist

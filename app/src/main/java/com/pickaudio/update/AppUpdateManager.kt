@@ -143,7 +143,8 @@ class AppUpdateManager(
                 val changelog = release.body?.takeIf { it.isNotBlank() } ?: (release.name ?: "版本更新")
 
                 return UpdateInfo(
-                    versionCode = extractVersionCode(vName),
+                    // GitHub tags contain version names, not Android build codes.
+                    versionCode = 0,
                     versionName = vName,
                     changelog = changelog,
                     downloadUrl = downloadUrl,
@@ -178,7 +179,7 @@ class AppUpdateManager(
                         val vName = manifest.versionName ?: return@use
 
                         return UpdateInfo(
-                            versionCode = manifest.versionCode ?: extractVersionCode(vName),
+                            versionCode = manifest.versionCode ?: 0,
                             versionName = vName,
                             changelog = manifest.changelog ?: "版本更新",
                             downloadUrl = manifest.downloadUrl ?: "",
@@ -195,28 +196,8 @@ class AppUpdateManager(
         return null
     }
 
-    private fun isNewer(remoteVersionName: String, remoteVersionCode: Int): Boolean {
-        if (remoteVersionCode > currentVersionCode) return true
-
-        val currentParts = currentVersionName.removePrefix("v").removePrefix("V")
-            .split(".").map { it.toIntOrNull() ?: 0 }
-        val remoteParts = remoteVersionName.removePrefix("v").removePrefix("V")
-            .split(".").map { it.toIntOrNull() ?: 0 }
-
-        val maxLen = maxOf(currentParts.size, remoteParts.size)
-        for (i in 0 until maxLen) {
-            val c = currentParts.getOrElse(i) { 0 }
-            val r = remoteParts.getOrElse(i) { 0 }
-            if (r > c) return true
-            if (r < c) return false
-        }
-        return false
-    }
-
-    private fun extractVersionCode(versionName: String): Int {
-        val digits = versionName.filter { it.isDigit() }
-        return digits.toIntOrNull() ?: 1
-    }
+    private fun isNewer(remoteVersionName: String, remoteVersionCode: Int): Boolean =
+        isNewerAppVersion(currentVersionName, currentVersionCode, remoteVersionName, remoteVersionCode)
 
     suspend fun startDownload(info: UpdateInfo) = withContext(Dispatchers.IO) {
         if (info.downloadUrl.isBlank()) {

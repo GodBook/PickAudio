@@ -3,595 +3,235 @@ package com.pickaudio.ui.screens
 import android.Manifest
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
-import androidx.compose.material.icons.automirrored.filled.PlaylistAddCheck
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import coil.compose.AsyncImage
-import com.pickaudio.data.db.PickAudioDatabase
+import com.pickaudio.PickAudioApplication
 import com.pickaudio.data.model.Track
 import com.pickaudio.data.repository.LibraryRepository
 import com.pickaudio.data.repository.PlaylistRepository
 import com.pickaudio.download.DownloadCoordinator
 import com.pickaudio.playback.PlaybackCoordinator
+import com.pickaudio.ui.components.*
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun LibraryScreen(
-    libraryRepository: LibraryRepository,
-    playlistRepository: PlaylistRepository,
-    playbackCoordinator: PlaybackCoordinator,
-    downloadCoordinator: DownloadCoordinator? = null,
-    onNavigateToPlaylistDetail: (String) -> Unit,
-    onNavigateToDownload: () -> Unit,
-    onNavigateToSettings: () -> Unit,
-    modifier: Modifier = Modifier
+    libraryRepository: LibraryRepository, playlistRepository: PlaylistRepository,
+    playbackCoordinator: PlaybackCoordinator, downloadCoordinator: DownloadCoordinator? = null,
+    onNavigateToPlaylistDetail: (String) -> Unit, onNavigateToDownload: () -> Unit,
+    onNavigateToSettings: () -> Unit, modifier: Modifier = Modifier, onNavigateToSource: () -> Unit = onNavigateToSettings
 ) {
     val context = LocalContext.current
+    val app = context.applicationContext as PickAudioApplication
+    val prefs = app.userPreferences
     val scope = rememberCoroutineScope()
-
-    var searchQuery by remember { mutableStateOf("") }
-    val tracksFlow = remember(searchQuery) {
-        if (searchQuery.isBlank()) libraryRepository.getAllTracks() else libraryRepository.searchTracks(searchQuery)
-    }
-    val tracks by tracksFlow.collectAsState(initial = emptyList())
-    val allPlaylists by playlistRepository.getAllPlaylists().collectAsState(initial = emptyList())
-    val currentPlayingTrack by playbackCoordinator.currentTrack.collectAsState()
-    val isPlaybackPlaying by playbackCoordinator.isPlaying.collectAsState()
-
-    var trackToDelete by remember { mutableStateOf<Track?>(null) }
-    var deleteLocalFile by remember { mutableStateOf(false) }
-    var trackForPlaylist by remember { mutableStateOf<Track?>(null) }
-    var trackForDownload by remember { mutableStateOf<Track?>(null) }
-
-    // SAF Pickers
+    val snack = remember { SnackbarHostState() }
+    val allTracks by libraryRepository.getAllTracks().collectAsState(initial = emptyList())
+    val recentIds by prefs.recentTrackIds.collectAsState(initial = emptyList())
+    val filterShort by prefs.filterShortAudio.collectAsState(initial = true)
+    val importState by libraryRepository.importProgress.collectAsState()
+    val current by playbackCoordinator.currentTrack.collectAsState()
+    val playing by playbackCoordinator.isPlaying.collectAsState()
+    val downloads by app.downloadCoordinator.getAllTasks().collectAsState(initial = emptyList())
+    var query by rememberSaveable { mutableStateOf("") }
+    var view by rememberSaveable { mutableStateOf("全部") }
+    var group by rememberSaveable { mutableStateOf<String?>(null) }
+    var sort by rememberSaveable { mutableStateOf("最近添加") }
+    var filter by rememberSaveable { mutableStateOf("全部") }
+    var selecting by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var importMenu by remember { mutableStateOf(false) }
+    var sortMenu by remember { mutableStateOf(false) }
+    var browseMenu by remember { mutableStateOf(false) }
+    var filterMenu by remember { mutableStateOf(false) }
+    var playlistTracks by remember { mutableStateOf<List<Track>?>(null) }
+    var downloadTracks by remember { mutableStateOf<List<Track>?>(null) }
+    var deleteTracks by remember { mutableStateOf<List<Track>?>(null) }
+    var deleteFiles by remember { mutableStateOf(false) }
+    var deleteDownload by remember { mutableStateOf<Track?>(null) }
+    fun message(value: String) { scope.launch { snack.showSnackbar(value) } }
+    fun select(id: String) { selecting = true; selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isNotEmpty()) {
-            scope.launch {
-                var imported = 0
-                uris.forEach { if (libraryRepository.importSafFile(it)) imported++ }
-                Toast.makeText(context, "成功导入 $imported 首歌曲", Toast.LENGTH_SHORT).show()
-            }
+        if (uris.isNotEmpty()) libraryRepository.startFileImport(uris)
+    }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let { libraryRepository.startDirectoryImport(it) }
+    }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) libraryRepository.startScan(filterShort) else message("未获得音频读取权限，仍可通过导入文件或文件夹添加歌曲")
+    }
+    fun scan() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED)
+            libraryRepository.startScan(filterShort)
+        else permission.launch(Manifest.permission.READ_MEDIA_AUDIO)
+    }
+    val matching = remember(allTracks, query, filter, view, recentIds) {
+        allTracks.filter { track ->
+            (query.isBlank() || listOf(track.title, track.artist, track.album, track.folderName).any { it.contains(query, true) }) &&
+                when (filter) { "本地" -> track.localUri != null; "已下载" -> track.sourceType == "DOWNLOADED"; "在线" -> track.localUri == null && track.platform != null; else -> true } &&
+                (view != "最近播放" || track.id in recentIds)
         }
     }
-
-    val treePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri != null) {
-            scope.launch {
-                val count = libraryRepository.importSafDirectory(uri)
-                Toast.makeText(context, "从目录导入 $count 首歌曲", Toast.LENGTH_SHORT).show()
-            }
-        }
+    fun groupName(track: Track): String = when (view) { "歌手" -> track.artist; "专辑" -> track.album; "文件夹" -> track.folderName.ifBlank { if (track.localUri != null) "未分类本地文件" else "在线或待关联文件" }; else -> "" }
+    val groups = matching.groupBy(::groupName)
+    val tracks = matching.filter { group == null || groupName(it) == group }.let { list ->
+        if (view == "最近播放") list.sortedBy { recentIds.indexOf(it.id) }
+        else when (sort) { "歌曲名称" -> list.sortedBy { it.title.lowercase() }; "歌手名称" -> list.sortedBy { it.artist.lowercase() }; "时长" -> list.sortedByDescending { it.durationMs }; else -> list.sortedByDescending { it.createdAt } }
     }
-
-    // Permission launcher for scanning MediaStore
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            scope.launch {
-                val count = libraryRepository.scanMediaStore(filterShortAudio = true)
-                Toast.makeText(context, "扫描完成，导入 $count 首新歌曲", Toast.LENGTH_SHORT).show()
+    val selected = allTracks.filter { it.id in selectedIds }
+    Scaffold(topBar = {
+        TopAppBar(title = { Text("音乐库", fontWeight = FontWeight.SemiBold) }, actions = {
+            IconButton(onClick = onNavigateToDownload) {
+                BadgedBox(badge = { val pending = downloads.count { it.status != "COMPLETED" }; if (pending > 0) Badge { Text(pending.toString()) } }) { Icon(Icons.Default.Download, "下载管理") }
             }
-        } else {
-            Toast.makeText(context, "未获得音频读取权限，您仍可通过选择文件导入", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    fun triggerScan() {
-        val permission = Manifest.permission.READ_MEDIA_AUDIO
-        if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) {
-            scope.launch {
-                val count = libraryRepository.scanMediaStore(filterShortAudio = true)
-                Toast.makeText(context, "扫描完成，导入 $count 首新歌曲", Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            permissionLauncher.launch(permission)
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("本地曲库", fontWeight = FontWeight.Bold) },
-                actions = {
-                    IconButton(onClick = onNavigateToDownload) {
-                        Icon(Icons.Default.Download, contentDescription = "下载管理")
-                    }
-                    IconButton(onClick = onNavigateToSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "设置")
-                    }
-                    IconButton(onClick = { triggerScan() }) {
-                        Icon(Icons.Default.Sync, contentDescription = "扫描歌曲")
-                    }
-                    IconButton(onClick = { filePicker.launch(arrayOf("audio/*")) }) {
-                        Icon(Icons.Default.AudioFile, contentDescription = "选择音频文件")
-                    }
-                    IconButton(onClick = { treePicker.launch(null) }) {
-                        Icon(Icons.Default.FolderOpen, contentDescription = "选择文件夹")
-                    }
-                }
-            )
-        },
-        modifier = modifier.fillMaxSize()
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            // Search Box
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                placeholder = { Text("搜索歌曲、歌手、专辑") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(Icons.Default.Close, contentDescription = "清除")
-                        }
-                    }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp)
-            )
-
-            // Header summary
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "全部歌曲 (${tracks.size})",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold
-                )
-
-                if (tracks.isNotEmpty()) {
-                    TextButton(onClick = { playbackCoordinator.setQueueAndPlay(tracks, 0) }) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("播放全部")
-                    }
-                }
-            }
-
-            if (tracks.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(bottom = 96.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.LibraryMusic,
-                            contentDescription = null,
-                            modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = if (searchQuery.isNotBlank()) "未找到匹配的本地歌曲" else "曲库暂无歌曲",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Button(onClick = { triggerScan() }) {
-                            Icon(Icons.Default.Sync, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("立即扫描手机歌曲")
-                        }
-                    }
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 96.dp)
-                ) {
-                    itemsIndexed(tracks) { index, track ->
-                        TrackRowItem(
-                            track = track,
-                            isCurrentTrack = (track.id == currentPlayingTrack?.id),
-                            isPlaying = isPlaybackPlaying,
-                            onClick = { playbackCoordinator.setQueueAndPlay(tracks, index) },
-                            onPlayNext = { playbackCoordinator.playNext(track) },
-                            onAddToQueue = { playbackCoordinator.addToQueue(track) },
-                            onToggleFavorite = {
-                                scope.launch {
-                                    val isFav = playlistRepository.toggleFavorite(track.id)
-                                    Toast.makeText(context, if (isFav) "已添加至我喜欢" else "已取消喜欢", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            onAddToPlaylist = {
-                                trackForPlaylist = track
-                            },
-                            onDownloadTrack = {
-                                val hasOnline = (track.platform != null && track.platformSongId != null) || track.id.startsWith("online_")
-                                if (hasOnline) {
-                                    trackForDownload = track
-                                } else {
-                                    Toast.makeText(context, "本地歌曲无需下载", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            onDeleteDownload = {
-                                if (downloadCoordinator != null) {
-                                    scope.launch {
-                                        val ok = downloadCoordinator.deleteDownloadForTrack(track.id)
-                                        if (ok) {
-                                            Toast.makeText(context, "已删除本地下载", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, "暂无本地下载文件", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            },
-                            onDelete = {
-                                trackToDelete = track
-                                deleteLocalFile = false
-                            }
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    // Delete confirmation dialog
-    if (trackToDelete != null) {
-        val track = trackToDelete!!
-        AlertDialog(
-            onDismissRequest = {
-                trackToDelete = null
-                deleteLocalFile = false
-            },
-            icon = {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error
-                )
-            },
-            title = { Text("删除歌曲") },
-            text = {
-                Column {
-                    Text("确定要从曲库中删除《${track.title}》吗？")
-                    if (track.localUri != null) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { deleteLocalFile = !deleteLocalFile }
-                        ) {
-                            Checkbox(
-                                checked = deleteLocalFile,
-                                onCheckedChange = { deleteLocalFile = it }
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "同时删除本地源文件",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val toDelete = track
-                        val shouldDeleteFile = deleteLocalFile
-                        trackToDelete = null
-                        deleteLocalFile = false
-                        scope.launch {
-                            playbackCoordinator.removeTrackFromQueue(toDelete.id)
-                            val success = libraryRepository.deleteTrack(toDelete.id, shouldDeleteFile)
-                            if (success) {
-                                Toast.makeText(context, "已从曲库中删除", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "删除失败", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    }
-                ) {
-                    Text("删除", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    trackToDelete = null
-                    deleteLocalFile = false
-                }) {
-                    Text("取消")
-                }
-            }
-        )
-    }
-
-    // Add to playlist dialog
-    if (trackForPlaylist != null) {
-        val t = trackForPlaylist!!
-        AlertDialog(
-            onDismissRequest = { trackForPlaylist = null },
-            title = { Text("加入歌单") },
-            text = {
-                if (allPlaylists.isEmpty()) {
-                    Text("暂无歌单")
-                } else {
-                    LazyColumn(modifier = Modifier.heightIn(max = 260.dp)) {
-                        items(allPlaylists) { pl ->
-                            ListItem(
-                                leadingContent = {
-                                    Icon(
-                                        imageVector = if (pl.id == PickAudioDatabase.FAVORITE_PLAYLIST_ID) Icons.Default.Favorite else Icons.AutoMirrored.Filled.QueueMusic,
-                                        contentDescription = null,
-                                        tint = if (pl.id == PickAudioDatabase.FAVORITE_PLAYLIST_ID) Color(0xFFFF4081) else MaterialTheme.colorScheme.primary
-                                    )
-                                },
-                                headlineContent = { Text(pl.name) },
-                                modifier = Modifier.clickable {
-                                    scope.launch {
-                                        playlistRepository.addTrackToPlaylist(pl.id, t.id)
-                                        Toast.makeText(context, "已加入歌单「${pl.name}」", Toast.LENGTH_SHORT).show()
-                                    }
-                                    trackForPlaylist = null
-                                }
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { trackForPlaylist = null }) { Text("取消") }
-            }
-        )
-    }
-
-    // Download Quality Selection Dialog
-    if (trackForDownload != null && downloadCoordinator != null) {
-        val t = trackForDownload!!
-        val platform = t.platform ?: if (t.id.startsWith("online_wy_")) "wy" else "tx"
-        val songId = t.platformSongId ?: t.id.removePrefix("online_wy_").removePrefix("online_tx_")
-        val qualities = listOf("128k", "320k", "flac")
-        AlertDialog(
-            onDismissRequest = { trackForDownload = null },
-            title = { Text("选择下载音质") },
-            text = {
-                Column {
-                    Text(text = "${t.title} - ${t.artist}", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    qualities.forEach { q ->
-                        FilledTonalButton(
-                            onClick = {
-                                scope.launch {
-                                    downloadCoordinator.enqueueDownload(
-                                        trackId = t.id,
-                                        title = t.title,
-                                        artist = t.artist,
-                                        album = t.album,
-                                        coverUri = t.coverUri,
-                                        platform = platform,
-                                        platformSongId = songId,
-                                        quality = q
-                                    )
-                                    Toast.makeText(context, "已加入下载任务", Toast.LENGTH_SHORT).show()
-                                }
-                                trackForDownload = null
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                        ) {
-                            Text("下载 $q 音质")
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { trackForDownload = null }) { Text("取消") }
-            }
-        )
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun TrackRowItem(
-    track: Track,
-    onClick: () -> Unit,
-    onPlayNext: () -> Unit,
-    onAddToQueue: () -> Unit,
-    onToggleFavorite: () -> Unit,
-    onAddToPlaylist: () -> Unit,
-    onDownloadTrack: () -> Unit,
-    onDeleteDownload: () -> Unit,
-    onDelete: () -> Unit,
-    modifier: Modifier = Modifier,
-    isCurrentTrack: Boolean = false,
-    isPlaying: Boolean = false
-) {
-    var showMenu by remember { mutableStateOf(false) }
-
-    ListItem(
-        colors = ListItemDefaults.colors(
-            containerColor = if (isCurrentTrack) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent
-        ),
-        headlineContent = {
-            Text(
-                text = track.title,
-                fontWeight = if (isCurrentTrack) FontWeight.Bold else FontWeight.Medium,
-                color = if (isCurrentTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        },
-        supportingContent = {
-            Text(
-                text = "${track.artist} · ${track.album}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        },
-        leadingContent = {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable { onClick() },
-                contentAlignment = Alignment.Center
-            ) {
-                if (!track.coverUri.isNullOrEmpty()) {
-                    AsyncImage(
-                        model = track.coverUri,
-                        contentDescription = track.title,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(24.dp))
-                        }
-                    }
-                }
-                if (isCurrentTrack) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 0.45f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
-            }
-        },
-        trailingContent = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onToggleFavorite) {
-                    Icon(
-                        imageVector = if (track.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                        contentDescription = "收藏",
-                        tint = if (track.isFavorite) Color(0xFFFF4081) else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
+            IconButton(onClick = onNavigateToSettings) { Icon(Icons.Default.Settings, "设置") }
+        })
+    }, snackbarHost = { SnackbarHost(snack) }, modifier = modifier.fillMaxSize()) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(bottom = 16.dp)) {
+            item(key = "library_controls") {
+              Column(Modifier.fillMaxWidth()) {
+            OutlinedTextField(query, { query = it }, placeholder = { Text("搜索歌曲、歌手、专辑或文件夹", maxLines = 1, overflow = TextOverflow.Ellipsis) }, singleLine = true,
+                leadingIcon = { Icon(Icons.Default.Search, null) },
+                trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "清除搜索") } },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
+            FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box {
-                    IconButton(onClick = { showMenu = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "更多", modifier = Modifier.size(20.dp))
+                    FilledTonalButton(onClick = { importMenu = true }, enabled = !importState.running) {
+                        Icon(Icons.Default.Add, null); Text("导入音乐")
                     }
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("下一首播放") },
-                            onClick = {
-                                onPlayNext()
-                                showMenu = false
-                            },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("添加到队尾") },
-                            onClick = {
-                                onAddToQueue()
-                                showMenu = false
-                            },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("加入歌单") },
-                            onClick = {
-                                showMenu = false
-                                onAddToPlaylist()
-                            },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAddCheck, contentDescription = null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("下载歌曲") },
-                            onClick = {
-                                showMenu = false
-                                onDownloadTrack()
-                            },
-                            leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("删除下载") },
-                            onClick = {
-                                showMenu = false
-                                onDeleteDownload()
-                            },
-                            leadingIcon = { Icon(Icons.Default.DeleteOutline, contentDescription = null) }
-                        )
-                        HorizontalDivider()
-                        DropdownMenuItem(
-                            text = { Text("删除", color = MaterialTheme.colorScheme.error) },
-                            onClick = {
-                                showMenu = false
-                                onDelete()
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            }
-                        )
+                    DropdownMenu(importMenu, { importMenu = false }) {
+                        DropdownMenuItem(text = { Text("扫描手机歌曲") }, onClick = { importMenu = false; scan() })
+                        DropdownMenuItem(text = { Text("选择音频文件") }, onClick = { importMenu = false; filePicker.launch(arrayOf("audio/*")) })
+                        DropdownMenuItem(text = { Text("选择文件夹") }, onClick = { importMenu = false; folderPicker.launch(null) })
+                    }
+                }
+                TextButton(onClick = { selecting = !selecting; selectedIds = emptySet() }) { Text(if (selecting) "完成" else "多选") }
+                Box {
+                    TextButton(onClick = { sortMenu = true }) { Text("排序") }
+                    DropdownMenu(sortMenu, { sortMenu = false }) {
+                        listOf("最近添加", "歌曲名称", "歌手名称", "时长").forEach { label ->
+                            DropdownMenuItem(text = { Text(label) }, onClick = { sort = label; sortMenu = false }, trailingIcon = { if (sort == label) Icon(Icons.Default.Check, null) })
+                        }
                     }
                 }
             }
-        },
-        modifier = modifier.combinedClickable(
-            onClick = { onClick() },
-            onLongClick = { showMenu = true }
-        )
-    )
+            FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box {
+                    OutlinedButton(onClick = { browseMenu = true }) { Text(if (view == "全部") "全部音乐" else view); Icon(Icons.Default.ArrowDropDown, null) }
+                    DropdownMenu(browseMenu, { browseMenu = false }) {
+                        listOf("全部", "最近播放", "歌手", "专辑", "文件夹").forEach { value ->
+                            DropdownMenuItem(text = { Text(if (value == "全部") "全部音乐" else value) }, onClick = { view = value; group = null; browseMenu = false }, trailingIcon = { if (view == value) Icon(Icons.Default.Check, null) })
+                        }
+                    }
+                }
+                Box {
+                    OutlinedButton(onClick = { filterMenu = true }) { Text(if (filter == "全部") "全部来源" else filter); Icon(Icons.Default.ArrowDropDown, null) }
+                    DropdownMenu(filterMenu, { filterMenu = false }) {
+                        listOf("全部", "本地", "已下载", "在线").forEach { value ->
+                            DropdownMenuItem(text = { Text(if (value == "全部") "全部来源" else value) }, onClick = { filter = value; filterMenu = false }, trailingIcon = { if (filter == value) Icon(Icons.Default.Check, null) })
+                        }
+                    }
+                }
+            }
+            if (importState.label.isNotEmpty()) {
+                Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(importState.message ?: "${importState.label} · ${importState.processed}${importState.total?.let { " / $it" }.orEmpty()}")
+                        Text("新增 ${importState.imported} · 跳过 ${importState.skipped} · 失败 ${importState.failed}", style = MaterialTheme.typography.bodySmall)
+                        if (importState.running) {
+                            if (importState.total != null && importState.total!! > 0) LinearProgressIndicator(progress = { importState.processed.toFloat() / importState.total!! }, modifier = Modifier.fillMaxWidth())
+                            else LinearProgressIndicator(Modifier.fillMaxWidth())
+                        }
+                        TextButton(onClick = { if (importState.running) libraryRepository.cancelImport() else libraryRepository.dismissImportResult() }) { Text(if (importState.running) "取消导入" else "收起") }
+                    }
+                }
+            }
+            if (selecting) FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { selectedIds = tracks.map { it.id }.toSet() }) { Text("全选 (${selectedIds.size})") }
+                TextButton(onClick = { playlistTracks = selected }, enabled = selected.isNotEmpty()) { Text("加入歌单") }
+                TextButton(onClick = { downloadTracks = selected }, enabled = selected.any { it.platform != null }) { Text("下载") }
+                TextButton(onClick = { deleteTracks = selected; deleteFiles = false }, enabled = selected.isNotEmpty()) { Text("移出曲库") }
+            }
+            if (group != null) TextButton(onClick = { group = null }) { Icon(Icons.Default.ArrowBack, null); Text(group!!) }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("共 ${tracks.size} 首", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (tracks.isNotEmpty()) TextButton(onClick = { playbackCoordinator.setQueueAndPlay(tracks) }) { Text("播放全部") }
+            }
+              }
+            }
+                if (tracks.isEmpty()) item {
+                    Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.LibraryMusic, null, modifier = Modifier.size(48.dp))
+                        Text(if (allTracks.isEmpty()) "添加第一首音乐" else "没有匹配歌曲", style = MaterialTheme.typography.titleMedium)
+                        Text(if (allTracks.isEmpty()) "扫描手机歌曲，或通过“导入音乐”选择文件和文件夹。" else "试试清除搜索或调整筛选条件。", modifier = Modifier.padding(vertical = 12.dp))
+                        if (allTracks.isEmpty()) Button(onClick = ::scan, enabled = !importState.running) { Text("扫描手机歌曲") }
+                        else TextButton(onClick = { query = ""; filter = "全部"; view = "全部"; group = null }) { Text("清除筛选") }
+                    }
+                }
+                if (view in listOf("歌手", "专辑", "文件夹") && group == null) {
+                    items(groups.keys.sorted(), key = { it }) { name ->
+                        ListItem(headlineContent = { Text(name) }, supportingContent = { Text("${groups[name].orEmpty().size} 首") },
+                            leadingContent = { Icon(if (view == "文件夹") Icons.Default.Folder else if (view == "专辑") Icons.Default.Album else Icons.Default.Person, null) },
+                            modifier = Modifier.clickable { group = name })
+                    }
+                } else items(tracks, key = { it.id }) { track ->
+                    val actions = mutableListOf(
+                        TrackMenuAction("下一首播放") { playbackCoordinator.playNext(track); message("已加入下一首") },
+                        TrackMenuAction("添加到队尾") { playbackCoordinator.addToQueue(track); message("已加入队尾") },
+                        TrackMenuAction("加入歌单") { playlistTracks = listOf(track) }
+                    )
+                    if (track.platform != null) actions.add(TrackMenuAction("下载歌曲") { downloadTracks = listOf(track) })
+                    if (track.sourceType == "DOWNLOADED") actions.add(TrackMenuAction("删除下载文件", true) { deleteDownload = track })
+                    actions.add(TrackMenuAction("移出音乐库", true) { deleteTracks = listOf(track); deleteFiles = false })
+                    MusicTrackRow(track, current?.id == track.id, playing, selecting, track.id in selectedIds,
+                        onClick = { playbackCoordinator.setQueueAndPlay(tracks, tracks.indexOf(track)) }, onSelect = { select(track.id) },
+                        onFavorite = { scope.launch { playlistRepository.toggleFavorite(track.id) } }, actions = actions)
+                }
+        }
+    }
+    playlistTracks?.let { PlaylistPickerDialog(it, playlistRepository, { playlistTracks = null }, { message("已加入「$it」") }) }
+    downloadTracks?.let { DownloadQualityDialog(it, app.downloadCoordinator, app.sourceManager, prefs, { downloadTracks = null },
+        onOpenSource = onNavigateToSource, onQueued = { message("已加入下载任务") }) }
+    deleteTracks?.let { list ->
+        AlertDialog(onDismissRequest = { deleteTracks = null }, title = { Text("移出音乐库") }, text = {
+            Column {
+                Text("移出这 ${list.size} 首歌曲及其歌单关联。")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(deleteFiles, { deleteFiles = it })
+                    Text("同时删除本地音频文件")
+                }
+                if (deleteFiles) Text("音频文件删除后无法通过撤销恢复。", color = MaterialTheme.colorScheme.error)
+            }
+        }, confirmButton = { TextButton(onClick = {
+            deleteTracks = null
+            scope.launch {
+                var failures = 0
+                list.forEach { playbackCoordinator.removeTrackFromQueue(it.id); if (!libraryRepository.deleteTrack(it.id, deleteFiles)) failures++ }
+                selectedIds = emptySet(); selecting = false
+                message(if (failures == 0) "已移出音乐库" else "${failures} 首处理失败，请检查文件授权")
+            }
+        }) { Text("移出", color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { deleteTracks = null }) { Text("取消") } })
+    }
+    deleteDownload?.let { track ->
+        AlertDialog(onDismissRequest = { deleteDownload = null }, title = { Text("删除下载文件") }, text = { Text("删除《${track.title}》的本地下载，歌单和收藏保留。") },
+            confirmButton = { TextButton(onClick = { deleteDownload = null; scope.launch { message(if (app.downloadCoordinator.deleteDownloadForTrack(track.id)) "下载文件已删除" else "未能删除，请检查文件授权") } }) { Text("删除") } },
+            dismissButton = { TextButton(onClick = { deleteDownload = null }) { Text("取消") } })
+    }
 }

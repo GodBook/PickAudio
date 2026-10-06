@@ -19,6 +19,7 @@ class PickAudioApplication : Application() {
     val libraryRepository: LibraryRepository by lazy { LibraryRepository(this, database) }
     val playlistRepository: PlaylistRepository by lazy { PlaylistRepository(database) }
     val backupManager: BackupManager by lazy { BackupManager(this, database) }
+    val lyricRepository: com.pickaudio.data.repository.LyricRepository by lazy { com.pickaudio.data.repository.LyricRepository(this, database) }
     val appUpdateManager: com.pickaudio.update.AppUpdateManager by lazy { com.pickaudio.update.AppUpdateManager(this) }
     val searchStateManager: com.pickaudio.ui.screens.SearchStateManager by lazy { com.pickaudio.ui.screens.SearchStateManager() }
 

@@ -9,6 +9,7 @@ import com.pickaudio.data.model.Quality
 import com.pickaudio.data.model.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 
 val Context.dataStore by preferencesDataStore(name = "pickaudio_settings")
 
@@ -22,6 +23,9 @@ class UserPreferences(private val context: Context) {
         val KEY_DEFAULT_DOWNLOAD_QUALITY = stringPreferencesKey("default_download_quality")
         val KEY_WIFI_ONLY_DOWNLOAD = booleanPreferencesKey("wifi_only_download")
         val KEY_SEARCH_HISTORY = stringPreferencesKey("search_history")
+        val KEY_RECENT_TRACKS = stringPreferencesKey("recent_track_ids")
+        val KEY_LYRIC_SIZE = intPreferencesKey("lyric_font_size")
+        val KEY_LYRIC_TRANSLATION = booleanPreferencesKey("lyric_translation")
     }
 
     val themeMode: Flow<ThemeMode> = context.dataStore.data.map { prefs ->
@@ -63,6 +67,46 @@ class UserPreferences(private val context: Context) {
 
     suspend fun setWifiOnlyDownload(enabled: Boolean) {
         context.dataStore.edit { it[KEY_WIFI_ONLY_DOWNLOAD] = enabled }
+    }
+
+    val recentTrackIds: Flow<List<String>> = context.dataStore.data.map { prefs ->
+        prefs[KEY_RECENT_TRACKS]?.split('|')?.filter { it.isNotBlank() } ?: emptyList()
+    }
+
+    suspend fun recordPlayed(trackId: String) {
+        context.dataStore.edit { prefs ->
+            val recent = prefs[KEY_RECENT_TRACKS]?.split('|').orEmpty().filter { it != trackId && it.isNotBlank() }
+            prefs[KEY_RECENT_TRACKS] = (listOf(trackId) + recent).take(50).joinToString("|")
+        }
+    }
+
+    val lyricFontSize: Flow<Int> = context.dataStore.data.map { (it[KEY_LYRIC_SIZE] ?: 18).coerceIn(14, 28) }
+    val showLyricTranslation: Flow<Boolean> = context.dataStore.data.map { it[KEY_LYRIC_TRANSLATION] ?: true }
+    suspend fun setLyricFontSize(value: Int) { context.dataStore.edit { it[KEY_LYRIC_SIZE] = value.coerceIn(14, 28) } }
+    suspend fun setShowLyricTranslation(value: Boolean) { context.dataStore.edit { it[KEY_LYRIC_TRANSLATION] = value } }
+
+    suspend fun exportSettings(): Map<String, String> = context.dataStore.data.map { prefs ->
+        mapOf(
+            "theme" to (prefs[KEY_THEME] ?: ThemeMode.SYSTEM.name),
+            "filterShortAudio" to (prefs[KEY_FILTER_SHORT_AUDIO] ?: true).toString(),
+            "onlineQuality" to (prefs[KEY_DEFAULT_ONLINE_QUALITY] ?: "128k"),
+            "downloadQuality" to (prefs[KEY_DEFAULT_DOWNLOAD_QUALITY] ?: "320k"),
+            "wifiOnly" to (prefs[KEY_WIFI_ONLY_DOWNLOAD] ?: true).toString(),
+            "lyricSize" to (prefs[KEY_LYRIC_SIZE] ?: 18).toString(),
+            "translation" to (prefs[KEY_LYRIC_TRANSLATION] ?: true).toString()
+        )
+    }.first()
+
+    suspend fun restoreSettings(values: Map<String, String>) {
+        context.dataStore.edit { prefs ->
+            values["theme"]?.takeIf { name -> ThemeMode.entries.any { it.name == name } }?.let { prefs[KEY_THEME] = it }
+            values["filterShortAudio"]?.toBooleanStrictOrNull()?.let { prefs[KEY_FILTER_SHORT_AUDIO] = it }
+            values["onlineQuality"]?.takeIf { value -> Quality.entries.any { it.value == value } }?.let { prefs[KEY_DEFAULT_ONLINE_QUALITY] = it }
+            values["downloadQuality"]?.takeIf { value -> Quality.entries.any { it.value == value } }?.let { prefs[KEY_DEFAULT_DOWNLOAD_QUALITY] = it }
+            values["wifiOnly"]?.toBooleanStrictOrNull()?.let { prefs[KEY_WIFI_ONLY_DOWNLOAD] = it }
+            values["lyricSize"]?.toIntOrNull()?.let { prefs[KEY_LYRIC_SIZE] = it.coerceIn(14, 28) }
+            values["translation"]?.toBooleanStrictOrNull()?.let { prefs[KEY_LYRIC_TRANSLATION] = it }
+        }
     }
 
     val searchHistory: Flow<List<String>> = context.dataStore.data.map { prefs ->

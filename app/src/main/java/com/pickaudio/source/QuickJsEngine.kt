@@ -3,6 +3,9 @@ package com.pickaudio.source
 import java.io.Closeable
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import com.google.gson.JsonParser
+import kotlinx.coroutines.*
+import java.util.concurrent.atomic.AtomicLong
 
 class QuickJsEngine : Closeable {
     private val lock = ReentrantLock()
@@ -43,6 +46,31 @@ class QuickJsEngine : Closeable {
         }
     }
 
+    suspend fun evaluateAsync(expression: String, filename: String = "request.js"): String = withTimeout(15000) {
+        val key = "__pickaudio_result_${requestIds.incrementAndGet()}"
+        evaluate("""
+            globalThis.$key = { state: 'pending' };
+            Promise.resolve($expression).then(function(value) {
+                if (globalThis.$key) globalThis.$key = { state: 'fulfilled', value: value };
+            }, function(error) {
+                if (globalThis.$key) globalThis.$key = { state: 'rejected', error: String(error && error.message || error) };
+            });
+            undefined;
+        """.trimIndent(), filename)
+        try {
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val result = JsonParser.parseString(evaluate("globalThis.$key", "<promise-result>") ?: error("音源解析状态为空")).asJsonObject
+                when (result.get("state")?.asString) {
+                    "fulfilled" -> return@withTimeout result.get("value")?.toString() ?: error("音源返回空地址")
+                    "rejected" -> error(result.get("error")?.asString ?: "音源解析失败")
+                }
+                delay(20)
+            }
+            @Suppress("UNREACHABLE_CODE") error("音源解析超时")
+        } finally { runCatching { evaluate("delete globalThis.$key", "<promise-cleanup>") } }
+    }
+
     fun resolveLxRequest(reqId: Long, isErr: Boolean, dataJson: String?) {
         lock.withLock {
             if (ctxPtr != 0L) {
@@ -78,4 +106,6 @@ class QuickJsEngine : Closeable {
             }
         }
     }
+
+    companion object { private val requestIds = AtomicLong() }
 }

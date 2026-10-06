@@ -34,11 +34,18 @@ sealed class Screen(val route: String, val title: String) {
     object SourceManager : Screen("sources", "音乐源管理")
     object Settings : Screen("settings", "设置")
     object PlaylistDetail : Screen("playlist_detail/{id}/{name}", "歌单详情") {
-        fun createRoute(id: String, name: String) = "playlist_detail/$id/$name"
+        fun createRoute(id: String, name: String) = "playlist_detail/${android.net.Uri.encode(id)}/${android.net.Uri.encode(name)}"
     }
 }
 
 class MainActivity : ComponentActivity() {
+    var openDownloadsVersion by mutableIntStateOf(0)
+        private set
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openDownloadsVersion++
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -59,20 +66,35 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainApp(app: PickAudioApplication) {
+fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = app.searchStateManager) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     val coordinator = app.playbackCoordinator
     val currentTrack by coordinator.currentTrack.collectAsState()
     val isPlaying by coordinator.isPlaying.collectAsState()
     val progressMs by coordinator.currentPositionMs.collectAsState()
     val durationMs by coordinator.durationMs.collectAsState()
+    val playbackState by coordinator.uiState.collectAsState()
+    val mainSnackbar = remember { SnackbarHostState() }
 
     var showFullPlayer by remember { mutableStateOf(false) }
+    var retryAfterSource by remember { mutableStateOf(false) }
     var currentRoute by remember { mutableStateOf(Screen.Library.route) }
+    LaunchedEffect(currentTrack?.id) { if (currentTrack == null) showFullPlayer = false }
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val activeRoute = navBackStackEntry?.destination?.route ?: currentRoute
+    LaunchedEffect(activeRoute) {
+        if (activeRoute != Screen.SourceManager.route && retryAfterSource) {
+            retryAfterSource = false
+            coordinator.retryCurrent()
+            showFullPlayer = true
+        }
+    }
+    LaunchedEffect((context as? MainActivity)?.openDownloadsVersion) {
+        if ((context as? MainActivity)?.intent?.getBooleanExtra("open_downloads", false) == true) navController.navigate(Screen.Download.route)
+    }
 
     // Favorite status for current track
     val isCurrentFav by remember(currentTrack?.id) {
@@ -90,6 +112,8 @@ fun MainApp(app: PickAudioApplication) {
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            snackbarHost = { SnackbarHost(mainSnackbar) },
             bottomBar = {
                 Column {
                     // Mini player floating above bottom bar
@@ -102,6 +126,7 @@ fun MainApp(app: PickAudioApplication) {
                             onPlayPauseClick = { coordinator.playOrPause() },
                             onNextClick = { coordinator.next() },
                             onClick = { showFullPlayer = true }
+                            , playbackState = playbackState
                         )
                     }
 
@@ -120,7 +145,7 @@ fun MainApp(app: PickAudioApplication) {
                             label = { Text("曲库") }
                         )
                         NavigationBarItem(
-                            selected = activeRoute == Screen.Playlists.route,
+                            selected = activeRoute == Screen.Playlists.route || activeRoute == Screen.PlaylistDetail.route,
                             onClick = {
                                 currentRoute = Screen.Playlists.route
                                 navController.navigate(Screen.Playlists.route) {
@@ -171,7 +196,8 @@ fun MainApp(app: PickAudioApplication) {
                         },
                         onNavigateToSettings = {
                             navController.navigate(Screen.Settings.route)
-                        }
+                        },
+                        onNavigateToSource = { navController.navigate(Screen.SourceManager.route) }
                     )
                 }
 
@@ -191,18 +217,20 @@ fun MainApp(app: PickAudioApplication) {
                         downloadCoordinator = app.downloadCoordinator,
                         playlistRepository = app.playlistRepository,
                         sourceManager = app.sourceManager,
-                        searchStateManager = app.searchStateManager,
+                        searchStateManager = searchStateManager,
                         onOpenPlayer = { showFullPlayer = true },
                         onNavigateToSourceManager = {
                             navController.navigate(Screen.SourceManager.route)
-                        }
+                        },
+                        onNavigateToDownload = { navController.navigate(Screen.Download.route) }
                     )
                 }
 
                 composable(Screen.Download.route) {
                     DownloadScreen(
                         downloadCoordinator = app.downloadCoordinator,
-                        onBack = { navController.popBackStack() }
+                        onBack = { navController.popBackStack() },
+                        onOpenSource = { navController.navigate(Screen.SourceManager.route) }
                     )
                 }
 
@@ -234,7 +262,8 @@ fun MainApp(app: PickAudioApplication) {
                         playlistRepository = app.playlistRepository,
                         playbackCoordinator = coordinator,
                         downloadCoordinator = app.downloadCoordinator,
-                        onBack = { navController.popBackStack() }
+                        onBack = { navController.popBackStack() },
+                        onOpenSource = { navController.navigate(Screen.SourceManager.route) }
                     )
                 }
             }
@@ -254,6 +283,18 @@ fun MainApp(app: PickAudioApplication) {
                         scope.launch { app.playlistRepository.toggleFavorite(trackId) }
                     },
                     isFavorite = isCurrentFav
+                    , onOpenSource = {
+                        showFullPlayer = false
+                        retryAfterSource = true
+                        navController.navigate(Screen.SourceManager.route)
+                    },
+                    onClearQueue = {
+                        coordinator.clearQueue()
+                        showFullPlayer = false
+                        scope.launch {
+                            if (mainSnackbar.showSnackbar("队列已清空", "撤销") == SnackbarResult.ActionPerformed) coordinator.undoClearQueue()
+                        }
+                    }
                 )
             }
         }

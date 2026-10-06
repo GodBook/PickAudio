@@ -21,6 +21,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.pickaudio.data.model.Track
+import com.pickaudio.data.model.PlaybackUiState
+import com.pickaudio.data.model.PlaybackPhase
 
 @Composable
 fun MiniPlayer(
@@ -31,7 +33,8 @@ fun MiniPlayer(
     onPlayPauseClick: () -> Unit,
     onNextClick: () -> Unit,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    playbackState: PlaybackUiState = PlaybackUiState()
 ) {
     if (currentTrack == null) return
 
@@ -43,8 +46,8 @@ fun MiniPlayer(
             .padding(horizontal = 12.dp, vertical = 6.dp)
             .clickable { onClick() },
         shape = RoundedCornerShape(18.dp),
-        tonalElevation = 8.dp,
-        shadowElevation = 10.dp,
+        tonalElevation = 2.dp,
+        shadowElevation = 0.dp,
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
         border = androidx.compose.foundation.BorderStroke(
             width = 1.dp,
@@ -95,7 +98,7 @@ fun MiniPlayer(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = currentTrack.artist,
+                        text = if (playbackState.phase in listOf(PlaybackPhase.RESOLVING, PlaybackPhase.BUFFERING, PlaybackPhase.ERROR, PlaybackPhase.CHOOSE_VERSION)) playbackState.phase.label else currentTrack.artist,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -106,7 +109,7 @@ fun MiniPlayer(
                 // Play / Pause (Tonal button)
                 FilledTonalIconButton(
                     onClick = onPlayPauseClick,
-                    modifier = Modifier.size(40.dp),
+                    modifier = Modifier.size(48.dp),
                     colors = IconButtonDefaults.filledTonalIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
                         contentColor = MaterialTheme.colorScheme.primary
@@ -122,7 +125,7 @@ fun MiniPlayer(
                 Spacer(modifier = Modifier.width(4.dp))
 
                 // Next
-                IconButton(onClick = onNextClick, modifier = Modifier.size(36.dp)) {
+                IconButton(onClick = onNextClick, modifier = Modifier.size(48.dp)) {
                     Icon(
                         imageVector = Icons.Default.SkipNext,
                         contentDescription = "下一首",

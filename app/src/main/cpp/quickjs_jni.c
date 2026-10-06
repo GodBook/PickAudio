@@ -160,6 +160,7 @@ Java_com_pickaudio_source_QuickJsNativeBridge_nativeCreateRuntime(JNIEnv *env, j
     RuntimeUserData *ud = (RuntimeUserData *)calloc(1, sizeof(RuntimeUserData));
     (*env)->GetJavaVM(env, &ud->jvm);
     ud->timeout_ms = 2000; // default 2 seconds execution timeout
+    ud->start_time_ms = get_time_ms();
     JS_SetRuntimeOpaque(rt, ud);
     JS_SetInterruptHandler(rt, js_interrupt_handler, ud);
 
@@ -203,6 +204,8 @@ Java_com_pickaudio_source_QuickJsNativeBridge_nativeRegisterHostBridge(JNIEnv *e
     JSRuntime *rt = JS_GetRuntime(ctx);
     RuntimeUserData *ud = (RuntimeUserData *)JS_GetRuntimeOpaque(rt);
     if (ud) {
+        ud->start_time_ms = get_time_ms();
+        JS_UpdateStackTop(rt);
         if (ud->host_callback_global) {
             (*env)->DeleteGlobalRef(env, ud->host_callback_global);
         }
@@ -299,6 +302,17 @@ Java_com_pickaudio_source_QuickJsNativeBridge_nativeRegisterHostBridge(JNIEnv *e
         "};\n";
 
     JSValue bval = JS_Eval(ctx, bootstrap_js, strlen(bootstrap_js), "<bootstrap>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(bval)) {
+        JSValue exception = JS_GetException(ctx);
+        const char *message = JS_ToCString(ctx, exception);
+        jclass error = (*env)->FindClass(env, "java/lang/IllegalStateException");
+        (*env)->ThrowNew(env, error, message ? message : "Music source bootstrap failed");
+        if (message) JS_FreeCString(ctx, message);
+        JS_FreeValue(ctx, exception);
+        JS_FreeValue(ctx, bval);
+        JS_FreeValue(ctx, global_obj);
+        return;
+    }
     JS_FreeValue(ctx, bval);
 
     JS_FreeValue(ctx, global_obj);
@@ -313,6 +327,7 @@ Java_com_pickaudio_source_QuickJsNativeBridge_nativeEvaluate(JNIEnv *env, jobjec
     RuntimeUserData *ud = (RuntimeUserData *)JS_GetRuntimeOpaque(rt);
     if (ud) {
         ud->start_time_ms = get_time_ms();
+        JS_UpdateStackTop(rt);
     }
 
     const char *c_script = (*env)->GetStringUTFChars(env, script, NULL);
@@ -351,6 +366,9 @@ JNIEXPORT jint JNICALL
 Java_com_pickaudio_source_QuickJsNativeBridge_nativeExecutePendingJobs(JNIEnv *env, jobject thiz, jlong rt_ptr) {
     JSRuntime *rt = (JSRuntime *)rt_ptr;
     if (!rt) return 0;
+    JS_UpdateStackTop(rt);
+    RuntimeUserData *ud = (RuntimeUserData *)JS_GetRuntimeOpaque(rt);
+    if (ud) ud->start_time_ms = get_time_ms();
     JSContext *pctx = NULL;
     int count = 0;
     while (JS_ExecutePendingJob(rt, &pctx) > 0) {
@@ -364,6 +382,9 @@ JNIEXPORT void JNICALL
 Java_com_pickaudio_source_QuickJsNativeBridge_nativeResolveLxRequestCallback(JNIEnv *env, jobject thiz, jlong ctx_ptr, jlong req_id, jboolean is_err, jstring data_json) {
     JSContext *ctx = (JSContext *)ctx_ptr;
     if (!ctx) return;
+    JS_UpdateStackTop(JS_GetRuntime(ctx));
+    RuntimeUserData *ud = (RuntimeUserData *)JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
+    if (ud) ud->start_time_ms = get_time_ms();
 
     JSValue global_obj = JS_GetGlobalObject(ctx);
     JSValue callbacks = JS_GetPropertyStr(ctx, global_obj, "__lx_callbacks");

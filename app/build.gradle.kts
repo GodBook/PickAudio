@@ -1,3 +1,6 @@
+import java.nio.file.Files
+import java.io.File
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -14,8 +17,8 @@ android {
         applicationId = "com.pickaudio"
         minSdk = 36
         targetSdk = 36
-        versionCode = 8
-        versionName = "1.1.6"
+        versionCode = 9
+        versionName = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -68,6 +71,26 @@ android {
             isReturnDefaultValues = true
             all {
                 it.jvmArgs("-Dfile.encoding=UTF-8", "-Dsun.jnu.encoding=UTF-8")
+                var testStaging: File? = null
+                // Gradle's Windows test worker cannot reliably load classes from a Unicode path on JDK 17.
+                it.doFirst {
+                    if (System.getProperty("os.name").startsWith("Windows")) {
+                        val original = it.classpath.files.filter { entry -> entry.exists() }
+                        val unicodeEntries = original.filter { entry -> entry.absolutePath.any { char -> char.code > 127 } }
+                        if (unicodeEntries.isNotEmpty()) {
+                            val staging = Files.createTempDirectory("pickaudio-junit-").toFile()
+                            testStaging = staging
+                            val replacements = unicodeEntries.mapIndexed { index, entry ->
+                                val dest = staging.resolve("$index/${entry.name}")
+                                if (entry.isDirectory) entry.copyRecursively(dest, overwrite = true)
+                                else { dest.parentFile.mkdirs(); entry.copyTo(dest, overwrite = true) }
+                                entry to dest
+                            }.toMap()
+                            it.classpath = files(original.map { entry -> replacements[entry] ?: entry })
+                        }
+                    }
+                }
+                it.doLast { testStaging?.deleteRecursively() }
             }
         }
     }
@@ -129,4 +152,8 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("org.json:json:20240303")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

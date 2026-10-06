@@ -2,9 +2,9 @@ package com.pickaudio.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val AccentBlue = Color(0xFF00B0FF)
-val AccentBlueDark = Color(0xFF0091EA)
-val AccentCyan = Color(0xFF00E5FF)
+val AccentBlue = Color(0xFF8FB8E8)
+val AccentBlueDark = Color(0xFF285E96)
+val AccentCyan = Color(0xFF9AB1CB)
 val AccentPrimaryContainerDark = Color(0xFF0D324D)
 val AccentPrimaryContainerLight = Color(0xFFE1F5FE)
 

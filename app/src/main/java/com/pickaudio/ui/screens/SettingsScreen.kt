@@ -1,390 +1,220 @@
 package com.pickaudio.ui.screens
 
-import android.content.Context
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import com.pickaudio.backup.BackupManager
-import com.pickaudio.data.model.Quality
-import com.pickaudio.data.model.ThemeMode
+import com.pickaudio.PickAudioApplication
+import com.pickaudio.backup.*
+import com.pickaudio.data.model.*
 import com.pickaudio.data.preferences.UserPreferences
+import com.pickaudio.data.repository.*
 import com.pickaudio.ui.components.UpdateDialog
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
-    userPreferences: UserPreferences,
-    backupManager: BackupManager,
-    appUpdateManager: com.pickaudio.update.AppUpdateManager = (LocalContext.current.applicationContext as com.pickaudio.PickAudioApplication).appUpdateManager,
-    onNavigateToSourceManager: () -> Unit,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier
+    userPreferences: UserPreferences, backupManager: BackupManager,
+    appUpdateManager: com.pickaudio.update.AppUpdateManager = (LocalContext.current.applicationContext as PickAudioApplication).appUpdateManager,
+    onNavigateToSourceManager: () -> Unit, onBack: () -> Unit, modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
+    val app = LocalContext.current.applicationContext as PickAudioApplication
     val scope = rememberCoroutineScope()
-
-    val themeMode by userPreferences.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
-    val filterShortAudio by userPreferences.filterShortAudio.collectAsState(initial = true)
-    val defaultOnlineQuality by userPreferences.defaultOnlineQuality.collectAsState(initial = Quality.Q128K)
-    val defaultDownloadQuality by userPreferences.defaultDownloadQuality.collectAsState(initial = Quality.Q320K)
+    val theme by userPreferences.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
+    val filterShort by userPreferences.filterShortAudio.collectAsState(initial = true)
+    val onlineQuality by userPreferences.defaultOnlineQuality.collectAsState(initial = Quality.Q128K)
+    val downloadQuality by userPreferences.defaultDownloadQuality.collectAsState(initial = Quality.Q320K)
+    val wifiOnly by userPreferences.wifiOnlyDownload.collectAsState(initial = true)
+    val lyricSize by userPreferences.lyricFontSize.collectAsState(initial = 18)
+    val translation by userPreferences.showLyricTranslation.collectAsState(initial = true)
     val updateStatus by appUpdateManager.status.collectAsState()
-
-    var cacheSizeStr by remember { mutableStateOf("计算中...") }
-
-    fun refreshCacheSize() {
-        scope.launch {
-            val size = withContext(Dispatchers.IO) {
-                calculateDirSize(context.cacheDir)
-            }
-            val mb = size / (1024.0 * 1024.0)
-            cacheSizeStr = "%.1f MB".format(mb)
+    val caches = remember { CacheRepository(app, app.database, app.downloadCoordinator) }
+    var usage by remember { mutableStateOf(CacheUsage()) }
+    var cacheBusy by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var preview by remember { mutableStateOf<BackupManifest?>(null) }
+    var restoreSettings by remember { mutableStateOf(true) }
+    var report by remember { mutableStateOf<RestoreReport?>(null) }
+    var relinkId by remember { mutableStateOf<String?>(null) }
+    fun refresh() { scope.launch { usage = caches.usage() } }
+    LaunchedEffect(Unit) { usage = caches.usage() }
+    val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri != null) scope.launch {
+            busy = true; status = "正在导出备份"
+            try {
+                val result = backupManager.export(uri)
+                status = "已导出 ${result.playlists} 个歌单、${result.favorites} 个收藏、${result.tracks} 首歌曲记录和 ${result.lyrics} 份歌词，以及偏好设置。音频文件需另行保存。"
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { status = "导出失败：${e.message}" }
+            finally { busy = false }
         }
     }
-
-    LaunchedEffect(Unit) {
-        refreshCacheSize()
+    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            busy = true; status = "正在检查备份"
+            try { preview = backupManager.inspect(uri); restoreSettings = preview?.settings != null; status = null }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { status = "备份无法恢复：${e.message}" }
+            finally { busy = false }
+        }
     }
-
-    // Export Backup Picker
-    val exportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/zip")
-    ) { uri ->
-        if (uri != null) {
+    val relinkPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val id = relinkId
+        if (uri != null && id != null) scope.launch {
+            try {
+                app.libraryRepository.relinkTrack(id, uri)
+                report = report?.copy(missingLocalTracks = report!!.missingLocalTracks.filter { it.id != id })
+                status = "音频文件已关联，原有歌单和收藏已保留"
+            } catch (e: Exception) { status = "关联失败：${e.message}" }
+            relinkId = null
+        }
+    }
+    Scaffold(topBar = {
+        TopAppBar(title = { Text("设置") }, navigationIcon = { IconButton(onClick = onBack, enabled = !busy && !cacheBusy) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } })
+    }, modifier = modifier.fillMaxSize()) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            item {
+                Text("外观", style = MaterialTheme.typography.titleMedium)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { ThemeMode.entries.forEach { mode ->
+                    FilterChip(theme == mode, { scope.launch { userPreferences.setThemeMode(mode) } }, label = { Text(mode.label) })
+                } }
+            }
+            item {
+                HorizontalDivider(); Text("音乐与下载", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
+                SettingSwitch("过滤 30 秒以下短音频", "仅影响扫描手机媒体库；手动导入的音频会保留。", filterShort) { scope.launch { userPreferences.setFilterShortAudio(it) } }
+                QualitySetting("默认在线播放音质", onlineQuality) { scope.launch { userPreferences.setDefaultOnlineQuality(it) } }
+                QualitySetting("默认下载音质", downloadQuality) { scope.launch { userPreferences.setDefaultDownloadQuality(it) } }
+                Text("可用音质由当前音乐源决定；不支持的档位会明确提示。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SettingSwitch("仅 Wi-Fi 下载", "关闭后允许使用移动网络，新任务会遵循此设置。", wifiOnly) { scope.launch { userPreferences.setWifiOnlyDownload(it) } }
+                ListItem(headlineContent = { Text("音乐源管理") }, supportingContent = { Text("平台绑定、支持音质与兼容性测试") }, modifier = Modifier.clickable(onClick = onNavigateToSourceManager))
+            }
+            item {
+                HorizontalDivider(); Text("歌词", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
+                Text("字号 · $lyricSize")
+                Slider(lyricSize.toFloat(), { scope.launch { userPreferences.setLyricFontSize(it.toInt()) } }, valueRange = 14f..28f, steps = 13)
+                SettingSwitch("显示歌词翻译", "有翻译时在原文下方显示。", translation) { scope.launch { userPreferences.setShowLyricTranslation(it) } }
+            }
+            item {
+                HorizontalDivider(); Text("存储与缓存", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
+                Text("清理缓存保留下载歌曲、歌单、收藏和手动歌词。暂停的下载进度也会保留。", style = MaterialTheme.typography.bodySmall)
+                CacheRow("播放音频缓存", formatDownloadBytes(usage.audio), cacheBusy, usage.audio > 0) {
+                    scope.launch {
+                        cacheBusy = true
+                        try { app.playbackCoordinator.clearPlaybackCache(); usage = caches.usage(); status = "音频缓存已清理" }
+                        catch (e: Exception) { status = "清理失败：${e.message}" }
+                        finally { cacheBusy = false }
+                    }
+                }
+                CacheRow("封面缓存", formatDownloadBytes(usage.covers), cacheBusy, usage.covers > 0) {
+                    scope.launch { cacheBusy = true; try { caches.clearCovers(); usage = caches.usage(); status = "封面缓存已清理" } finally { cacheBusy = false } }
+                }
+                CacheRow("下载临时文件", "${formatDownloadBytes(usage.partials)} · 可清理 ${formatDownloadBytes(usage.unusedPartials)}", cacheBusy, usage.unusedPartials > 0) {
+                    scope.launch { cacheBusy = true; try { caches.clearUnusedParts(); usage = caches.usage(); status = "无任务的临时文件已清理" } finally { cacheBusy = false } }
+                }
+                TextButton(onClick = ::refresh, enabled = !cacheBusy) { Text("刷新空间统计") }
+            }
+            item {
+                HorizontalDivider(); Text("备份与恢复", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
+                Text("包含歌单、收藏、歌曲记录、歌词与校准、偏好设置和音源描述。\n不包含音频文件与音源脚本；换手机后可重新关联音频并导入原脚本。", style = MaterialTheme.typography.bodyMedium)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { exportPicker.launch("PickAudio_Backup_${SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.getDefault()).format(Date())}.zip") }, enabled = !busy) { Text("导出备份") }
+                    OutlinedButton(onClick = { importPicker.launch(arrayOf("application/zip", "*/*")) }, enabled = !busy) { Text("恢复备份") }
+                }
+                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                status?.let { Text(it, modifier = Modifier.padding(top = 12.dp)) }
+            }
+            item {
+                HorizontalDivider(); Text("版本与更新", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
+                Text("拾音 v${appUpdateManager.currentVersionName}")
+                TextButton(onClick = { scope.launch { appUpdateManager.checkForUpdates() } }) { Text("检查更新") }
+                Text("本地与在线音乐播放器 · 无账号", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+    preview?.let { manifest ->
+        AlertDialog(onDismissRequest = { if (!busy) preview = null }, title = { Text("确认恢复备份") }, text = {
+            Column {
+                Text("备份时间：${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(manifest.exportedAt))}")
+                Text("${manifest.playlists.size} 个歌单 · ${manifest.favorites.size} 个收藏\n${manifest.tracks.size} 首歌曲记录 · ${manifest.lyrics.size} 份歌词")
+                Text("同一歌单增量合并，重复恢复不会复制歌单。原有音频文件保留。", modifier = Modifier.padding(top = 12.dp))
+                if (manifest.settings != null) Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(restoreSettings, { restoreSettings = it }, enabled = !busy); Text("恢复偏好设置") }
+                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
+        }, confirmButton = { Button(enabled = !busy, onClick = {
             scope.launch {
-                val ok = backupManager.exportBackup(uri)
-                if (ok) {
-                    Toast.makeText(context, "备份导出成功", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "备份导出失败", Toast.LENGTH_LONG).show()
-                }
+                busy = true
+                try { report = backupManager.restore(manifest, restoreSettings); preview = null; status = "备份恢复完成" }
+                catch (e: Exception) { status = "恢复失败，原有数据保留：${e.message}"; preview = null }
+                finally { busy = false }
             }
-        }
+        }) { Text("恢复并合并") } }, dismissButton = { TextButton(enabled = !busy, onClick = { preview = null }) { Text("取消") } })
     }
-
-    // Import Backup Picker
-    val importLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                val ok = backupManager.importBackup(uri)
-                if (ok) {
-                    Toast.makeText(context, "备份恢复合并完成", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "备份文件无效或损坏", Toast.LENGTH_LONG).show()
+    report?.let { result ->
+        AlertDialog(onDismissRequest = { report = null }, title = { Text("恢复结果") }, text = {
+            Column {
+                Text("新增 ${result.addedTracks} 首，合并 ${result.mergedTracks} 首\n新增 ${result.newPlaylists} 个歌单，合并 ${result.mergedPlaylists} 个歌单\n收藏 ${result.favorites} 条 · 歌词 ${result.lyrics} 份\n偏好设置：${if (result.settingsRestored) "已恢复" else "保留本机设置"}")
+                if (result.missingSources.isNotEmpty()) Text("需要重新导入音源：${result.missingSources.joinToString()}", modifier = Modifier.padding(top = 12.dp))
+                if (result.missingLocalTracks.isNotEmpty()) {
+                    Text("待关联音频 · ${result.missingLocalTracks.size} 首", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp))
+                    LazyColumn(Modifier.heightIn(max = 200.dp)) {
+                        items(result.missingLocalTracks, key = { it.id }) { song ->
+                            ListItem(headlineContent = { Text(song.title) }, supportingContent = { Text(song.artist) },
+                                trailingContent = { TextButton(onClick = { relinkId = song.id; relinkPicker.launch(arrayOf("audio/*")) }) { Text("关联文件") } })
+                        }
+                    }
                 }
             }
-        }
+        }, confirmButton = { TextButton(onClick = { report = null }) { Text("完成") } })
     }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("设置", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                }
-            )
-        },
-        modifier = modifier.fillMaxSize()
-    ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // Theme Setting
-            item {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("外观主题", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            ThemeMode.entries.forEach { mode ->
-                                FilterChip(
-                                    selected = themeMode == mode,
-                                    onClick = { scope.launch { userPreferences.setThemeMode(mode) } },
-                                    label = { Text(mode.label) }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Scan Rules
-            item {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("曲库扫描规则", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("过滤 30 秒以下短音频", fontWeight = FontWeight.Medium)
-                                Text("自动扫描系统媒体库时忽略铃声等短音频", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Switch(
-                                checked = filterShortAudio,
-                                onCheckedChange = { scope.launch { userPreferences.setFilterShortAudio(it) } }
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Default Qualities
-            item {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("音质偏好", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Online default
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("默认在线播放音质", fontWeight = FontWeight.Medium)
-                            Text(defaultOnlineQuality.label, color = MaterialTheme.colorScheme.primary)
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Download default
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("默认下载音质", fontWeight = FontWeight.Medium)
-                            Text(defaultDownloadQuality.label, color = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                }
-            }
-
-            // Music Source Shortcut
-            item {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onNavigateToSourceManager() }
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text("音乐源管理", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                            Text("管理并配置 LX 自定义源脚本", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Icon(Icons.Default.ChevronRight, contentDescription = null)
-                    }
-                }
-            }
-
-            // Cache Management
-            item {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("缓存管理", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("临时缓存空间占用: $cacheSizeStr", style = MaterialTheme.typography.bodyMedium)
-                            TextButton(onClick = {
-                                scope.launch {
-                                    withContext(Dispatchers.IO) {
-                                        context.cacheDir.deleteRecursively()
-                                    }
-                                    refreshCacheSize()
-                                    Toast.makeText(context, "缓存已清理", Toast.LENGTH_SHORT).show()
-                                }
-                            }) {
-                                Text("清理缓存")
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Backup & Restore
-            item {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("数据备份与恢复", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            "备份歌单、收藏及设置到 ZIP 压缩包；恢复时自动安全合并，不覆盖现有歌曲文件。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = {
-                                exportLauncher.launch("PickAudio_Backup_${System.currentTimeMillis()}.zip")
-                            }) {
-                                Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("导出备份")
-                            }
-                            OutlinedButton(onClick = {
-                                importLauncher.launch(arrayOf("application/zip", "*/*"))
-                            }) {
-                                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("恢复备份")
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Version & Update
-            item {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("版本与更新", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("当前版本: v${appUpdateManager.currentVersionName}", fontWeight = FontWeight.Medium)
-                                Text(
-                                    "托管于 GitHub (GodBook/PickAudio)",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Button(
-                                onClick = {
-                                    scope.launch {
-                                        appUpdateManager.checkForUpdates()
-                                    }
-                                }
-                            ) {
-                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("检查更新")
-                            }
-                        }
-                    }
-                }
-            }
-
-            // About
-            item {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "拾音 PickAudio v${appUpdateManager.currentVersionName}",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "仅供个人及少量好友使用 · 无账号设计 · 开源播放器",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-    }
-
-    UpdateDialog(
-        status = updateStatus,
-        currentVersion = appUpdateManager.currentVersionName,
-        onDismiss = { appUpdateManager.dismissUpdate() },
-        onStartDownload = { info ->
-            scope.launch {
-                appUpdateManager.startDownload(info)
-            }
-        },
-        onCancelDownload = { appUpdateManager.cancelDownload() },
-        onInstall = { file -> appUpdateManager.installApk(file) },
-        onOpenBrowser = { url -> appUpdateManager.openBrowserReleasePage(url) },
-        onRetry = {
-            scope.launch {
-                appUpdateManager.checkForUpdates()
-            }
-        }
-    )
+    UpdateDialog(updateStatus, appUpdateManager.currentVersionName, { appUpdateManager.dismissUpdate() },
+        { info -> scope.launch { appUpdateManager.startDownload(info) } }, appUpdateManager::cancelDownload, appUpdateManager::installApk,
+        appUpdateManager::openBrowserReleasePage, { scope.launch { appUpdateManager.checkForUpdates() } })
 }
 
-private fun calculateDirSize(dir: File): Long {
-    var size = 0L
-    val files = dir.listFiles() ?: return 0L
-    for (f in files) {
-        size += if (f.isDirectory) calculateDirSize(f) else f.length()
+@Composable
+private fun SettingSwitch(title: String, description: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) { Text(title); Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        Switch(checked, onChange, modifier = Modifier.semantics { contentDescription = title })
     }
-    return size
+}
+
+@Composable
+private fun QualitySetting(title: String, selected: Quality, onSelect: (Quality) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Text(title)
+        Box {
+            TextButton(onClick = { expanded = true }) { Text(selected.label) }
+            DropdownMenu(expanded, { expanded = false }) {
+                Quality.entries.forEach { quality -> DropdownMenuItem(text = { Text(quality.label) }, onClick = { onSelect(quality); expanded = false }) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CacheRow(title: String, size: String, busy: Boolean, available: Boolean, onClear: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Text(title); Text(size, style = MaterialTheme.typography.bodySmall)
+        TextButton(onClick = onClear, enabled = !busy && available) { Text("清理") }
+    }
 }

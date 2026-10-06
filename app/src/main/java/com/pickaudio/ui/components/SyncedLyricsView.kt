@@ -2,6 +2,9 @@ package com.pickaudio.ui.components
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.animateScrollBy
+import kotlinx.coroutines.flow.first
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -24,6 +27,7 @@ import com.pickaudio.online.LyricLine
 import com.pickaudio.online.LyricParser
 import kotlinx.coroutines.delay
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SyncedLyricsView(
     lyrics: List<LyricLine>,
@@ -31,7 +35,9 @@ fun SyncedLyricsView(
     offsetMs: Long,
     onSeekTo: (Long) -> Unit,
     onOffsetChange: (Long) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    fontSizeSp: Int = 18,
+    showTranslation: Boolean = true
 ) {
     if (lyrics.isEmpty()) {
         Box(
@@ -53,11 +59,23 @@ fun SyncedLyricsView(
 
     val listState = rememberLazyListState()
     var isUserScrolling by remember { mutableStateOf(false) }
+    var dragging by remember { mutableStateOf(false) }
+    var touchRevision by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is DragInteraction.Start -> { dragging = true; isUserScrolling = true; touchRevision++ }
+                is DragInteraction.Stop, is DragInteraction.Cancel -> { dragging = false; touchRevision++ }
+            }
+        }
+    }
 
     // Resume auto scroll 5 seconds after user touches
-    LaunchedEffect(isUserScrolling) {
-        if (isUserScrolling) {
+    LaunchedEffect(isUserScrolling, dragging, touchRevision) {
+        if (isUserScrolling && !dragging) {
             delay(5000)
+            while (listState.isScrollInProgress) delay(100)
             isUserScrolling = false
         }
     }
@@ -65,26 +83,24 @@ fun SyncedLyricsView(
     // Auto scroll to active index
     LaunchedEffect(activeIndex, isUserScrolling) {
         if (!isUserScrolling && activeIndex in lyrics.indices) {
-            // Center the active line
-            listState.animateScrollToItem(
-                index = (activeIndex - 2).coerceAtLeast(0)
-            )
+            var layout = snapshotFlow { listState.layoutInfo }.first { it.visibleItemsInfo.isNotEmpty() }
+            if (layout.visibleItemsInfo.none { it.index == activeIndex }) {
+                listState.scrollToItem(activeIndex)
+                layout = snapshotFlow { listState.layoutInfo }.first { info -> info.visibleItemsInfo.any { it.index == activeIndex } }
+            }
+            val item = layout.visibleItemsInfo.first { it.index == activeIndex }
+            val center = (layout.viewportStartOffset + layout.viewportEndOffset) / 2f
+            listState.animateScrollBy(item.offset + item.size / 2f - center)
         }
     }
 
     Column(modifier = modifier.fillMaxSize()) {
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
         LazyColumn(
             state = listState,
             modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { isUserScrolling = true },
-                        onDrag = { _, _ -> isUserScrolling = true }
-                    )
-                },
-            contentPadding = PaddingValues(vertical = 120.dp, horizontal = 24.dp),
+                .fillMaxSize(),
+            contentPadding = PaddingValues(vertical = (maxHeight / 4).coerceIn(8.dp, 96.dp), horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             itemsIndexed(lyrics) { index, line ->
@@ -92,9 +108,9 @@ fun SyncedLyricsView(
                 val textColor = if (isActive) {
                     MaterialTheme.colorScheme.primary
                 } else {
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                    MaterialTheme.colorScheme.onSurfaceVariant
                 }
-                val fontSize = if (isActive) 18.sp else 15.sp
+                val fontSize = if (isActive) fontSizeSp.sp else (fontSizeSp - 2).sp
                 val fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
 
                 Column(
@@ -110,32 +126,33 @@ fun SyncedLyricsView(
                         fontSize = fontSize,
                         fontWeight = fontWeight,
                         textAlign = TextAlign.Center,
-                        lineHeight = 24.sp
+                        lineHeight = (fontSizeSp + 8).sp
                     )
-                    if (!line.translation.isNullOrBlank()) {
+                    if (showTranslation && !line.translation.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = line.translation!!,
-                            color = textColor.copy(alpha = if (isActive) 0.85f else 0.35f),
-                            fontSize = 13.sp,
+                            color = textColor,
+                            fontSize = (fontSizeSp - 3).sp,
                             textAlign = TextAlign.Center
                         )
                     }
                 }
             }
         }
+        }
 
+        if (isUserScrolling) TextButton(onClick = { isUserScrolling = false }) { Text("回到当前歌词") }
         // Offset Calibration Controls (±100ms)
         Surface(
             tonalElevation = 2.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
+            FlowRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
                     text = "校准: ${offsetMs}ms",
@@ -143,11 +160,11 @@ fun SyncedLyricsView(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilledTonalButton(
                         onClick = { onOffsetChange(offsetMs - 100) },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        modifier = Modifier.height(32.dp)
+                        modifier = Modifier.heightIn(min = 48.dp)
                     ) {
                         Icon(Icons.Default.Remove, contentDescription = "-100ms", modifier = Modifier.size(16.dp))
                         Text("-100ms", fontSize = 11.sp)
@@ -158,7 +175,7 @@ fun SyncedLyricsView(
                     FilledTonalButton(
                         onClick = { onOffsetChange(offsetMs + 100) },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        modifier = Modifier.height(32.dp)
+                        modifier = Modifier.heightIn(min = 48.dp)
                     ) {
                         Icon(Icons.Default.Add, contentDescription = "+100ms", modifier = Modifier.size(16.dp))
                         Text("+100ms", fontSize = 11.sp)
@@ -168,7 +185,7 @@ fun SyncedLyricsView(
                         Spacer(modifier = Modifier.width(6.dp))
                         IconButton(
                             onClick = { onOffsetChange(0L) },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Icon(Icons.Default.Refresh, contentDescription = "重置", modifier = Modifier.size(16.dp))
                         }
