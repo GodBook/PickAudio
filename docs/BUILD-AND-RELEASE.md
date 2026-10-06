@@ -66,9 +66,11 @@ Release默认为未签名构建。用户已授权本次GitHub与Release更新，
 
 脚本核对包名、源码版本、单调版本号、正式证书、签名有效性、双ABI、ELF PT_LOAD和APK ZIP的16KiB对齐，输出实际大小、SHA-256与元数据。输出目录限定在app/build，根目录历史version.json不受影响。仅检查本地未签名包时可使用-AllowUnsigned并指定真实较低的PreviousVersionCode；结果明确为publishable=false。
 
-GitHub工作流执行单测、Lint、Debug/Release构建、schema核查以及API36 Debug/裁剪设备回归；工作流尚须在远端首次运行确认。构建许可材料与准确依赖列表打包进APK。升级依赖时成组更新锁定和校验信息，复查源授权、JNI和音频流程。
+GitHub工作流执行单测、Lint、Debug/Release构建、schema核查以及API36 Debug/裁剪设备回归；v1.3.0的[完整远端CI](https://github.com/GodBook/PickAudio/actions/runs/37504251297)已通过，单测61项、两组设备测试各51项，均无失败或跳过。构建许可材料与准确依赖列表打包进APK。升级依赖时成组更新锁定和校验信息，复查源授权、JNI和音频流程。
 
 托管CI明确安装SDK36/build-tools35/NDK28.2/CMake3.22.1，避免setup-android默认请求已下线的tools包。CI=true时从Google、Maven Central和Gradle Plugin Portal解析依赖；本地环境继续使用既有镜像配置。依赖锁定与摘要校验保持开启。
+
+官方源与镜像的少量POM/module及废弃transform-api空JAR存在字节差异；新增摘要均直接核对官方发布的SHA1、坐标与版本约束，空JAR逐条核对ZIP内容一致。不得直接信任失败报告中的新值或关闭校验。LazyColumn界面测试查找屏幕外项目时使用列表performScrollToNode，再检查实际按钮可见，不依赖目标已被组合。
 
 ## 系统备份范围
 

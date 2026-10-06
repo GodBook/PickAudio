@@ -28,6 +28,8 @@
 
 优化实现阶段已通过 61 项 JVM 单测，Debug 与裁剪验证变体各 51 项 API 36 设备测试；实际生产裁剪代码的冷恢复、重复队列、后台自然切歌和真实通知入口均已验证。发布版另已通过 61 项 JVM 单测、Lint 0 错误/61 警告、原签名和双 ABI 的 16 KiB ZIP/ELF 核查。
 
+[GitHub CI](https://github.com/GodBook/PickAudio/actions/runs/37504251297) 已完整通过：单测、Debug/Release 构建、Lint、Room schema，以及 Debug/裁剪验证变体各 51 项 API 36 设备测试，均无测试失败或跳过。依赖锁定和严格摘要校验保持开启。
+
 在专用 API 36 模拟器上，使用原签名直接覆盖 v1.2.0 正式版，Room v2→v4 迁移成功，歌曲、资源、在线引用、歌单、收藏时间、重复队列、手动歌词与 300ms 校准、自定义音源和设置保留；1024 字节暂停下载数据保留，数据库完整性正常。完整证据及发布检查点见 [优化执行记录](https://github.com/GodBook/PickAudio/blob/main/docs/OPTIMIZATION-EXECUTION.md)。模拟器结果不等同于实体设备帧率、耗电、蓝牙或 TalkBack 验收。
 
 ## 安装包与校验

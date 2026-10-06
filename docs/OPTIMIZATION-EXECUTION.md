@@ -6,29 +6,25 @@
 
 用户要求执行[优化审查计划](OPTIMIZATION-REVIEW-2026-10-06.md)，随后于2026-10-07要求“更新GITHUB和release”，授权本轮提交、推送、版本标签、正式签名APK上传及发布。审查文档保留需求、代码基线和验收标准，本文件为本轮唯一执行状态。历史正式发布资料保留于UX-UPGRADE.md和RELEASE-1.2.0.md。
 
-完成O01–O24的实现及可在当前环境完成的验证；O25/O26按条件评估，不自动扩展系统支持范围。本轮工作目录D:/CHATGPT/PickAudio拾音，分支codex/optimization-plan，基线4e5da8e4d3d8938a6df0fff4b0a77da0871cac53。优化阶段以1.2.0/code 9完成，现准备发布1.3.0/code 10；原正式APK、release.jks及用户已有改动保留。
+完成O01–O24的实现、验收和正式发布；O25/O26按条件评估，不自动扩展系统支持范围。本轮工作目录D:/CHATGPT/PickAudio拾音，分支codex/optimization-plan，基线4e5da8e4d3d8938a6df0fff4b0a77da0871cac53。优化阶段以1.2.0/code 9完成，正式发布为1.3.0/code 10；原正式APK、release.jks及用户已有改动保留。
 
 ## 当前发布检查点
 
-目标：将已验收优化发布为v1.3.0（versionCode 10），更新GitHub主分支和正式Release。公开最新仍为v1.2.0/code 9；优化代码及CI修复已正常推送main，当前账号具备管理权限，分支未受保护。原签名证书已再次核对一致；签名沿用已有本地流程，凭据不写入源码或发布记录。
+v1.3.0/code 10已于2026-10-07 01:41:29（Asia/Shanghai）[正式发布](https://github.com/GodBook/PickAudio/releases/tag/v1.3.0)，draft=false、prerelease=false，GitHub latest已指向该版本。注释标签v1.3.0指向b88c9beeba93fa22e3d4c49ad2ebfd2fccd3c908，main已包含优化代码与CI修复。原签名证书已再次核对一致；签名沿用已有本地流程，凭据不写入源码或发布记录。
 
 本地发布构建已完成：61项JVM全部通过，Lint为0错误/61警告。最终正式签名APK为8,156,279字节（7.78MiB），SHA-256 863b976f99f4076eb479be4a3d22824d9ab8910ba0214da1e5b209a654f5417c，证书与原正式版一致，双ABI/16KiB ZIP和ELF检查通过；相对原54,403,842字节减少85.01%。APK位于项目根PickAudio-v1.3.0-release.apk；构建与签名核查原始记录位于app/build/release-1.3.0。APK内源码标识为4172f6e；签名前已比对全部代码/资源ZIP条目与覆盖升级验收包一致，只更新源码标识及签名元数据。
 
 正式签名覆盖升级已通过：专用emulator-5560安装原正式v1.2.0，写入v2夹具，直接以install -r升级v1.3.0。UID保留，Room为v4；歌曲、资源、在线引用、歌单、收藏时间、重复队列条目701/702及3500ms暂停快照、手动歌词/300ms校准、自定义源与绑定、设置文件字节完全保留；1024字节暂停下载保留，integrity_check=ok且无外键错误。脚本scripts/verify-release-upgrade.ps1，结果app/build/release-1.3.0/upgrade-verification.json。替换测试签名之前，原专用设备调试数据已归档至pre-upgrade-debug-data.tar，未操作个人设备。
 
-代码已提交并推送main（4172f6ea696c8bfe9fa8791c734f21b7a82a36fd）。首次CI运行37496522393在setup-android阶段失败，原因是默认安装已下线的tools包；明确安装SDK36、build-tools35、NDK28.2与CMake3.22.1后，该阶段已通过。第二轮37497159116在阿里云gradle-plugin镜像下载返回502，尚未进入项目测试；现让CI从官方仓库解析，继续完整检查，依赖锁定/摘要校验未关闭。最终APK已完成源码标识更新和再次覆盖安装。
+发布提交的[GitHub CI 37504251297](https://github.com/GodBook/PickAudio/actions/runs/37504251297)已完整通过：61项JVM单测、Debug/Release构建、Lint、Room schema，以及Debug/validation各51项API36设备测试，均无失败或跳过。三项job均为success；设备原始日志为ci-37504251297-debug-log.txt、ci-37504251297-validation-log.txt。后续CI、校验元数据和测试修正均未改动4172f6e以来的应用生产代码、构建版本或生产裁剪规则，已以git diff复核。
 
-第三轮37498195238在Kotlin Android插件marker POM校验失败：Maven Central与既有镜像的POM字节不同。已从Maven Central直接取得Android/Compose两份POM，核对其上游SHA1，并比较插件实现依赖完全一致（2.0.21）；仅补充这两份官方POM的SHA-256，JAR摘要与严格校验保持不变。KSP marker官方POM与原摘要一致。
+首次CI发现的环境问题均已修复：明确SDK包以替代已下线的tools；托管CI使用官方仓库，避免镜像502；逐件核对官方SHA1、坐标与版本约束后补齐插件marker、父POM及BOM/module摘要，严格校验和锁定始终开启。transform-api两份JAR只有相同的25字节MANIFEST，逐条核对ZIP内容一致，POM均无依赖。官方文件保存在official-poms，13组UTP配置单独严格解析通过，记录official-utp-check.txt。
 
-第四轮37499357806暴露官方源额外解析的父POM/BOM/module缺少摘要，以及transform-api的仓库字节差异。已直接下载Google/Maven Central文件，逐一核对上游SHA1和坐标/版本约束；transform-api两份JAR都只有相同的25字节MANIFEST，无代码，POM均无依赖。仅补充经核验的6件文件SHA-256，不关闭校验或改变依赖版本。原始文件保存在app/build/release-1.3.0/official-poms。
+第六轮设备回归曾因较小屏幕下LazyColumn尚未组合重试按钮而失败，其余50项各自通过；仅将测试定位改为列表performScrollToNode，保留按钮assertIsDisplayed。最终两组完整51项重新运行均通过，不跳过或弱化验收。
 
-v1.3.0草稿Release已上传最终正式APK与SHA256SUMS.txt；GitHub服务端APK摘要与上述863b976f…一致。草稿尚未发布，不作为公开更新入口。
+正式Release包含PickAudio-v1.3.0-release.apk与SHA256SUMS.txt。已从公开下载链接完整取得APK，HTTP 200，8,156,279字节，SHA-256与本地正式包及GitHub服务端digest完全一致；下载副本为published-PickAudio-v1.3.0-release.apk。公开下载验证通过后，才将根version.json与README的安装入口更新为1.3.0。
 
-第五轮37501534968已完成远端单测及Debug/Release构建；Debug/validation设备包也成功构建，但UTP测试运行器解析官方JUnit 5.9.2 BOM module时缺少摘要，尚未执行设备测试。已核验官方SHA1及18项版本约束，补齐该文件的SHA-256。官方源下本地Debug/Release/测试APK与validation/测试APK均构建通过，schema 2..4检查通过。
-
-第六轮37502907913构建、61项单测、Lint与schema已通过；Debug完整51项中50项通过，平台错误重试UI断言在较小屏幕失败。原因是LazyColumn尚未组合屏幕下方按钮，performScrollTo要求目标节点先存在；改为对列表performScrollToNode查找目标，再保留assertIsDisplayed。只修改测试，不修改应用代码或APK。官方源下13组UTP配置已逐一解析并通过严格校验，记录official-utp-check.txt。
-
-下一步：完成远端CI，正式发布现有v1.3.0草稿，再同步根version.json与公开安装入口。根version.json暂保留已发布v1.2.0，避免出现不可下载的更新入口。
+version.json与README随本次提交同步main，版本、下载URL、大小与SHA-256均已按公开Release核对。专用设备上的原签名v1.3.0实际点击“检查更新”后显示“已是最新版本”，原始记录release-130-update-ui.xml。本轮发布已完成；O25/O26和实体硬件验收保持为独立后续范围。
 
 ## 优化实现验收（2026-10-06）
 
@@ -105,7 +101,7 @@ Windows下生成资源的任务依赖已补。各变体先完成构建，再独�
 | O21 | 已验收（JVM/API36） | 安全缓存键、实际字节复用/资源变化、运行中容量缩小、本地文件旁路、诊断隐私 |
 | O22 | 本地已验收 | R8/资源裁剪、生产精确保留、validation设备整组与相同Release DEX的启动/通知验证 |
 | O23 | 本地已验收 | 61项JVM，Debug/validation各完整51项；生产策略和真实故障边界，增补后台通知回归 |
-| O24 | 本地已验收，远端CI首次运行另验 | schema、版本、锁定/校验、发布/签名/对齐工具、许可打包与系统备份规则 |
+| O24 | 已验收（本地/远端CI/正式发布） | schema、版本、锁定/校验、发布/签名/对齐工具、许可打包与系统备份规则；CI三项job通过，公开APK下载和SHA-256核验通过 |
 | O25 | 已评估：保持API36 | 暂无扩大设备范围的需求，UIDT与权限政策维持一致 |
 | O26 | 已评估：后续独立阶段 | 无缝切歌、速度/均衡器、标签写入、分享分别需要额外流程和硬件/格式验证，不设为本轮可靠性前提 |
 
