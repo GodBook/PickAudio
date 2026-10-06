@@ -219,6 +219,9 @@ interface SourceDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun setPlatformSelection(selection: PlatformSourceSelectionEntity)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertDefaultPlatformSelection(selection: PlatformSourceSelectionEntity)
 }
 
 @Dao

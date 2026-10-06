@@ -197,11 +197,11 @@ class LxSourceManager(
         sourceDao.insertOrUpdate(entity)
 
         // Automatically select if first source
-        if (sourceDao.getSelectionForPlatform("wy") == null && capabilities.containsKey("wy")) {
-            selectSourceForPlatform("wy", entity.id)
+        if (capabilities.containsKey("wy")) {
+            sourceDao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity("wy", entity.id))
         }
-        if (sourceDao.getSelectionForPlatform("tx") == null && capabilities.containsKey("tx")) {
-            selectSourceForPlatform("tx", entity.id)
+        if (capabilities.containsKey("tx")) {
+            sourceDao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity("tx", entity.id))
         }
 
         entity
@@ -364,14 +364,8 @@ class LxSourceManager(
                 )
                 sourceDao.insertOrUpdate(entity)
             }
-            val wySel = sourceDao.getSelectionForPlatform("wy")
-            if (wySel == null) {
-                selectSourceForPlatform("wy", builtinId)
-            }
-            val txSel = sourceDao.getSelectionForPlatform("tx")
-            if (txSel == null) {
-                selectSourceForPlatform("tx", builtinId)
-            }
+            sourceDao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity("wy", builtinId))
+            sourceDao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity("tx", builtinId))
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             Log.e("LxSourceManager", "ensureBuiltinSources error", e)

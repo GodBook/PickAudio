@@ -5,6 +5,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.gson.JsonParser
 import com.pickaudio.data.db.PickAudioDatabase
+import com.pickaudio.data.db.PlatformSourceSelectionEntity
+import com.pickaudio.data.db.SourceScriptEntity
 import com.pickaudio.network.NetworkPolicy
 import com.pickaudio.source.*
 import kotlinx.coroutines.*
@@ -63,6 +65,28 @@ class OptimizationSourceTest {
         lx.on(lx.EVENT_NAMES.request, $handler);
         lx.send(lx.EVENT_NAMES.inited, {status:true,sources:{wy:{name:'验证',actions:['musicUrl'],qualitys:['128k']}}});
     """.trimIndent()
+
+    @Test fun lateDefaultSourceInitializationKeepsUserSelectionAndExplicitDisable() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(context, PickAudioDatabase::class.java).build()
+        try {
+            val dao = db.sourceDao()
+            dao.insertOrUpdate(SourceScriptEntity(id = "builtin_aggregate", name = "默认",
+                scriptHash = "default-fixture", scriptContent = "", capabilitiesJson = "{}"))
+            dao.insertOrUpdate(SourceScriptEntity(id = "custom-fixture", name = "自定义",
+                scriptHash = "custom-fixture", scriptContent = "", capabilitiesJson = "{}"))
+            // Default initialization can observe no row before a user selection is committed.
+            assertNull(dao.getSelectionForPlatform("wy"))
+            dao.setPlatformSelection(PlatformSourceSelectionEntity("wy", "custom-fixture"))
+            dao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity("wy", "builtin_aggregate"))
+            assertEquals("custom-fixture", dao.getSelectionForPlatform("wy")?.sourceId)
+            dao.setPlatformSelection(PlatformSourceSelectionEntity("wy", null))
+            dao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity("wy", "builtin_aggregate"))
+            assertNotNull(dao.getSelectionForPlatform("wy"))
+            assertNull(dao.getSelectionForPlatform("wy")?.sourceId)
+            dao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity("tx", "builtin_aggregate"))
+            assertEquals("builtin_aggregate", dao.getSelectionForPlatform("tx")?.sourceId)
+        } finally { db.close() }
+    }
 
     @Test fun returnedPrivateUrlRequiresExplicitFixtureInjection() = runBlocking {
         val db = Room.inMemoryDatabaseBuilder(context, PickAudioDatabase::class.java).build()

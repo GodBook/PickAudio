@@ -24,7 +24,9 @@ v1.3.0/code 10已于2026-10-07 01:41:29（Asia/Shanghai）[正式发布](https:/
 
 正式Release包含PickAudio-v1.3.0-release.apk与SHA256SUMS.txt。已从公开下载链接完整取得APK，HTTP 200，8,156,279字节，SHA-256与本地正式包及GitHub服务端digest完全一致；下载副本为published-PickAudio-v1.3.0-release.apk。公开下载验证通过后，才将根version.json与README的安装入口更新为1.3.0。
 
-version.json与README随本次提交同步main，版本、下载URL、大小与SHA-256均已按公开Release核对。专用设备上的原签名v1.3.0实际点击“检查更新”后显示“已是最新版本”，原始记录release-130-update-ui.xml。本轮发布已完成；O25/O26和实体硬件验收保持为独立后续范围。
+version.json与README已同步main（eb715e391e0ba5ce3cc1f562e6675aad9d1aab42），GitHub API、raw主分支与备用CDN均核对版本、下载URL、大小及SHA-256一致。专用设备上的原签名v1.3.0实际点击“检查更新”后显示“已是最新版本”，原始记录release-130-update-ui.xml。
+
+2026-10-07发布后复验37505972054：build和validation通过，Debug 51项中只有thrownNetworkCallbackFailsResolutionImmediately失败，assert收到空错误，解析意外成功。结合ensureBuiltinSources的先读后REPLACE及构造器后台初始化，确认默认源写入与自定义绑定存在竞态；晚到默认写入可能覆盖用户选择。已改为数据库INSERT OR IGNORE默认绑定，并新增确定性覆盖“默认源先读空→用户写入→晚到默认插入”、明确禁用及真正未配置平台。生产代码发生变化，准备另发1.3.1/code 11，保留既有1.3.0附件。当前修复未验收，需重新构建、签名、完整CI、覆盖升级、公开下载验证；根version.json在补丁公开前保持1.3.0。
 
 ## 优化实现验收（2026-10-06）
 
