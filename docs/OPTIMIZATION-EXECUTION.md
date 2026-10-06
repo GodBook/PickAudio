@@ -10,7 +10,7 @@
 
 ## 当前发布检查点
 
-目标：将已验收优化发布为v1.3.0（versionCode 10），更新GitHub主分支和正式Release。远端最新为v1.2.0/code 9，main仍为上述基线，当前账号具备管理权限，分支未受保护。原签名证书已再次核对一致；签名沿用已有本地流程，凭据不写入源码或发布记录。
+目标：将已验收优化发布为v1.3.0（versionCode 10），更新GitHub主分支和正式Release。公开最新仍为v1.2.0/code 9；优化代码及CI修复已正常推送main，当前账号具备管理权限，分支未受保护。原签名证书已再次核对一致；签名沿用已有本地流程，凭据不写入源码或发布记录。
 
 本地发布构建已完成：61项JVM全部通过，Lint为0错误/61警告。最终正式签名APK为8,156,279字节（7.78MiB），SHA-256 863b976f99f4076eb479be4a3d22824d9ab8910ba0214da1e5b209a654f5417c，证书与原正式版一致，双ABI/16KiB ZIP和ELF检查通过；相对原54,403,842字节减少85.01%。APK位于项目根PickAudio-v1.3.0-release.apk；构建与签名核查原始记录位于app/build/release-1.3.0。APK内源码标识为4172f6e；签名前已比对全部代码/资源ZIP条目与覆盖升级验收包一致，只更新源码标识及签名元数据。
 
@@ -20,7 +20,11 @@
 
 第三轮37498195238在Kotlin Android插件marker POM校验失败：Maven Central与既有镜像的POM字节不同。已从Maven Central直接取得Android/Compose两份POM，核对其上游SHA1，并比较插件实现依赖完全一致（2.0.21）；仅补充这两份官方POM的SHA-256，JAR摘要与严格校验保持不变。KSP marker官方POM与原摘要一致。
 
-下一步：完成远端CI，上传并发布v1.3.0，再同步根version.json与公开安装入口。根version.json暂保留已发布v1.2.0，避免出现不可下载的更新入口。
+第四轮37499357806暴露官方源额外解析的父POM/BOM/module缺少摘要，以及transform-api的仓库字节差异。已直接下载Google/Maven Central文件，逐一核对上游SHA1和坐标/版本约束；transform-api两份JAR都只有相同的25字节MANIFEST，无代码，POM均无依赖。仅补充经核验的6件文件SHA-256，不关闭校验或改变依赖版本。原始文件保存在app/build/release-1.3.0/official-poms。
+
+v1.3.0草稿Release已上传最终正式APK与SHA256SUMS.txt；GitHub服务端APK摘要与上述863b976f…一致。草稿尚未发布，不作为公开更新入口。
+
+下一步：完成远端CI，正式发布现有v1.3.0草稿，再同步根version.json与公开安装入口。根version.json暂保留已发布v1.2.0，避免出现不可下载的更新入口。
 
 ## 优化实现验收（2026-10-06）
 
