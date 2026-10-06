@@ -1,5 +1,7 @@
 package com.pickaudio.ui.components
 
+import androidx.compose.ui.res.stringResource
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -17,7 +19,8 @@ import kotlinx.coroutines.launch
 fun QueueBottomSheet(
     queue: List<Track>, currentIndex: Int, onTrackClick: (Int) -> Unit,
     onRemoveItem: (Int) -> Unit, onClearQueue: () -> Unit, onDismiss: () -> Unit,
-    onMove: (Int, Int) -> Unit = { _, _ -> }, onUndoClear: () -> Unit = {}
+    onMove: (Int, Int) -> Unit = { _, _ -> }, onUndoClear: () -> Unit = {},
+    entryIds: List<Long> = emptyList()
 ) {
     val state = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -27,16 +30,16 @@ fun QueueBottomSheet(
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 16.dp)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("播放队列 · ${queue.size} 首", style = MaterialTheme.typography.titleMedium)
-                TextButton(onClick = onClearQueue, enabled = queue.isNotEmpty()) { Text("清空") }
+                TextButton(onClick = onClearQueue, enabled = queue.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.ui_queuebottomsheet_001)) }
             }
             SnackbarHost(snackbar)
             if (queue.isEmpty()) Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
-                TextButton(onClick = onUndoClear) { Text("队列已清空 · 撤销") }
+                TextButton(onClick = onUndoClear) { Text(stringResource(com.pickaudio.R.string.ui_queuebottomsheet_002)) }
             } else LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp), state = state) {
-                itemsIndexed(queue, key = { index, track -> "${track.id}_${queue.take(index).count { it.id == track.id }}" }) { index, track ->
+                itemsIndexed(queue, key = { index, _ -> (entryIds.getOrNull(index) ?: index.toLong()).toString() }) { index, track ->
                     MusicTrackRow(track, isCurrent = index == currentIndex, onClick = { onTrackClick(index) },
                         actions = listOf(TrackMenuAction("移出队列") { onRemoveItem(index) }),
-                        trailing = { ReorderHandle("${track.id}_${queue.take(index).count { it.id == track.id }}", index, queue.size, state, onMove, {}) })
+                        trailing = { ReorderHandle((entryIds.getOrNull(index) ?: index.toLong()).toString(), index, queue.size, state, onMove, {}) })
                 }
             }
         }

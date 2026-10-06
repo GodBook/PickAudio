@@ -20,12 +20,13 @@ class CacheRepository(private val context: Context, private val database: PickAu
         return downloads.partialDirectory.listFiles().orEmpty().filter { it.isFile && it.name.startsWith("temp_") && it.name.endsWith(".part") && it.name !in protectedNames }
     }
     suspend fun usage(): CacheUsage = withContext(Dispatchers.IO) {
-        CacheUsage(AudioCacheManager.size(context), context.imageLoader.diskCache?.size ?: 0,
+        CacheUsage(AudioCacheManager.size(context), (context.imageLoader.diskCache?.size ?: 0) + size(File(context.cacheDir, "embedded_covers")),
             size(downloads.partialDirectory), unusedParts().sumOf { it.length() })
     }
     suspend fun clearCovers() = withContext(Dispatchers.IO) {
         context.imageLoader.memoryCache?.clear()
         context.imageLoader.diskCache?.clear()
+        File(context.cacheDir, "embedded_covers").listFiles().orEmpty().filter { it.isFile }.forEach { it.delete() }
     }
     suspend fun clearUnusedParts() = withContext(Dispatchers.IO) { unusedParts().forEach { it.delete() } }
 }

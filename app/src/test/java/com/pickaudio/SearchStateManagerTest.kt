@@ -9,6 +9,17 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SearchStateManagerTest {
+    @Test fun duplicateFullPageStopsAndSwitchingSourceKeepsLoadedResults() = runTest {
+        var requests = 0
+        val manager = SearchStateManager(this) { platform, _, _ -> requests++; (1..20).map { song(platform, it.toString()) } }
+        manager.submit("歌曲"); advanceUntilIdle()
+        manager.loadMore("wy"); advanceUntilIdle()
+        assertFalse(manager.platformStates.getValue("wy").hasMore)
+        assertEquals(20, manager.platformStates.getValue("wy").items.size)
+        manager.selectPlatform(Platform.QQ); advanceUntilIdle()
+        assertEquals(3, requests)
+        assertEquals(20, manager.platformStates.getValue("tx").items.size)
+    }
     private fun song(platform: String, id: String) = SearchSongItem(platform, id, "歌曲$id", "歌手", "专辑", 180000)
     @Test fun failedPlatformDoesNotHideSuccessfulResults() = runTest {
         val manager = SearchStateManager(this) { platform, _, _ -> if (platform == "tx") error("服务错误") else listOf(song(platform, "1")) }

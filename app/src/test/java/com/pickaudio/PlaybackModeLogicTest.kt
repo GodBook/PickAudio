@@ -1,119 +1,60 @@
 package com.pickaudio
 
 import com.pickaudio.data.model.PlaybackMode
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import com.pickaudio.data.model.Track
+import com.pickaudio.playback.PlaybackQueue
+import com.pickaudio.playback.shouldRestartOnPrevious
+import org.junit.Assert.*
 import org.junit.Test
-import java.util.Stack
 
+/** Exercises the policy used by both app controls and the media session. */
 class PlaybackModeLogicTest {
-
-    @Test
-    fun testSequentialModeTransition() {
-        val queueSize = 3
-        var currentIndex = 0
-
-        fun nextIndex(mode: PlaybackMode, cur: Int, size: Int): Int {
-            return when (mode) {
-                PlaybackMode.SEQUENTIAL -> if (cur + 1 < size) cur + 1 else -1 // -1 means stop
-                PlaybackMode.LIST_LOOP -> (cur + 1) % size
-                PlaybackMode.SINGLE_LOOP -> cur // natural completion loops same
-                else -> cur
-            }
-        }
-
-        assertEquals(1, nextIndex(PlaybackMode.SEQUENTIAL, 0, queueSize))
-        assertEquals(2, nextIndex(PlaybackMode.SEQUENTIAL, 1, queueSize))
-        assertEquals(-1, nextIndex(PlaybackMode.SEQUENTIAL, 2, queueSize)) // stops at end!
+    private fun queue(size: Int = 3) = PlaybackQueue { it }.apply {
+        replace((0 until size).map { Track("track$it", "歌曲$it", "", "", 10000) })
     }
-
-    @Test
-    fun testListLoopModeTransition() {
-        val queueSize = 3
-        fun nextIndex(cur: Int, size: Int) = (cur + 1) % size
-
-        assertEquals(1, nextIndex(0, queueSize))
-        assertEquals(2, nextIndex(1, queueSize))
-        assertEquals(0, nextIndex(2, queueSize)) // loops back to 0!
+    @Test fun testSequentialModeTransition() {
+        val q = queue()
+        assertEquals(1, q.next(PlaybackMode.SEQUENTIAL, true))
+        assertEquals(2, q.next(PlaybackMode.SEQUENTIAL, true))
+        assertNull(q.next(PlaybackMode.SEQUENTIAL, true))
     }
-
-    @Test
-    fun testSingleLoopVsManualNext() {
-        // Natural end stays on same track
-        val naturalNext = 0 // same index
-        assertEquals(0, naturalNext)
-
-        // Manual Next switches to next track
-        fun manualNext(cur: Int, size: Int) = (cur + 1) % size
-        assertEquals(1, manualNext(0, 3))
+    @Test fun testListLoopModeTransition() {
+        val q = queue()
+        assertEquals(1, q.next(PlaybackMode.LIST_LOOP, true))
+        assertEquals(2, q.next(PlaybackMode.LIST_LOOP, true))
+        assertEquals(0, q.next(PlaybackMode.LIST_LOOP, true))
     }
-
-    @Test
-    fun testSmartPreviousRule() {
-        fun computePreviousAction(progressMs: Long, curIndex: Int, size: Int): Pair<String, Int> {
-            return if (progressMs > 3000L) {
-                Pair("SEEK_ZERO", curIndex)
-            } else {
-                val prev = if (curIndex > 0) curIndex - 1 else size - 1
-                Pair("PREV_TRACK", prev)
-            }
-        }
-
-        val resultOver3s = computePreviousAction(3500L, 2, 5)
-        assertEquals("SEEK_ZERO", resultOver3s.first)
-        assertEquals(2, resultOver3s.second)
-
-        val resultUnder3s = computePreviousAction(1200L, 2, 5)
-        assertEquals("PREV_TRACK", resultUnder3s.first)
-        assertEquals(1, resultUnder3s.second)
+    @Test fun testSingleLoopVsManualNext() {
+        val q = queue()
+        assertEquals(0, q.next(PlaybackMode.SINGLE_LOOP, true))
+        assertEquals(1, q.next(PlaybackMode.SINGLE_LOOP, false))
     }
-
-    @Test
-    fun testShuffleRoundWithoutRepeatingAndHistoryBack() {
-        val size = 5
-        val shufflePool = (0 until size).toMutableList()
-        val history = Stack<Int>()
-
-        val playedOrder = mutableListOf<Int>()
-        while (shufflePool.isNotEmpty()) {
-            val next = shufflePool.removeAt(0)
-            history.push(next)
-            playedOrder.add(next)
-        }
-
-        // Must play all without duplicate in a round
-        assertEquals(5, playedOrder.distinct().size)
-
-        // Going back follows exact history
-        assertEquals(playedOrder[4], history.pop())
-        assertEquals(playedOrder[3], history.pop())
+    @Test fun testSmartPreviousRule() {
+        assertTrue(shouldRestartOnPrevious(3500))
+        assertFalse(shouldRestartOnPrevious(3000))
+        assertFalse(shouldRestartOnPrevious(1200))
+        val q = queue(5)
+        q.select(2)
+        assertEquals(1, q.previous(PlaybackMode.SEQUENTIAL))
     }
-
-    @Test
-    fun testQueueItemRemoval() {
-        val queue = mutableListOf("track1", "track2", "track3")
-        var currentIndex = 1 // track2 playing
-
-        // Remove track before current
-        fun removeItem(index: Int): Int {
-            queue.removeAt(index)
-            return if (index < currentIndex) {
-                currentIndex - 1
-            } else if (index == currentIndex) {
-                if (index < queue.size) index else 0
-            } else {
-                currentIndex
-            }
-        }
-
-        // Remove track3 (after current)
-        currentIndex = removeItem(2)
-        assertEquals(1, currentIndex)
-        assertEquals(listOf("track1", "track2"), queue)
-
-        // Remove track1 (before current)
-        currentIndex = removeItem(0)
-        assertEquals(0, currentIndex)
-        assertEquals(listOf("track2"), queue)
+    @Test fun testShuffleRoundWithoutRepeatingAndHistoryBack() {
+        val q = queue(5)
+        val played = mutableListOf(q.current!!.id)
+        repeat(4) { q.next(PlaybackMode.SHUFFLE); played.add(q.current!!.id) }
+        assertEquals(5, played.distinct().size)
+        q.previous(PlaybackMode.SHUFFLE)
+        assertEquals(played[3], q.current!!.id)
+        q.previous(PlaybackMode.SHUFFLE)
+        assertEquals(played[2], q.current!!.id)
+    }
+    @Test fun testQueueItemRemoval() {
+        val q = queue()
+        q.select(1)
+        val occurrence = q.current!!.id
+        q.remove(2)
+        assertEquals(1, q.currentIndex)
+        q.remove(0)
+        assertEquals(0, q.currentIndex)
+        assertEquals(occurrence, q.current!!.id)
     }
 }

@@ -10,11 +10,18 @@ import com.pickaudio.online.*
 import kotlinx.coroutines.*
 
 data class LyricPayload(val original: String, val translation: String? = null)
-data class LoadedLyrics(val lines: List<LyricLine>, val offsetMs: Long, val local: Boolean)
+data class LoadedLyrics(val lines: List<LyricLine>, val offsetMs: Long, val local: Boolean, val warning: String? = null)
 
-class LyricRepository(private val context: Context, private val database: PickAudioDatabase) {
+class LyricRepository(private val context: Context, private val database: PickAudioDatabase,
+    private val fetch: suspend (String, String) -> Pair<String, String?> = { platform, songId ->
+        if (platform == "wy") NetEaseSearchAdapter.getLyric(songId) else QqMusicSearchAdapter.getLyric(songId)
+    }) {
     private val dao = database.lyricDao()
     private val gson = Gson()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
+        android.util.Log.e("Lyrics", "Unable to save lyric calibration", error)
+    })
+    private val offsetWrites = java.util.concurrent.ConcurrentHashMap<String, Job>()
 
     private fun parse(content: String): List<LyricLine> = if (content.trimStart().startsWith("{")) {
         val payload = gson.fromJson(content, LyricPayload::class.java)
@@ -28,9 +35,18 @@ class LyricRepository(private val context: Context, private val database: PickAu
         val platform = track.platform
         val songId = track.platformSongId
         if (platform == null || songId == null) return@withContext LoadedLyrics(emptyList(), cached?.offsetMs ?: 0, true)
-        val result = if (platform == "wy") NetEaseSearchAdapter.getLyric(songId) else QqMusicSearchAdapter.getLyric(songId)
+        val result = try {
+            fetch(platform, songId)
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            if (cached != null) return@withContext LoadedLyrics(parse(cached.content), cached.offsetMs, false,
+                "更新歌词失败，正在显示缓存")
+            throw e
+        }
         currentCoroutineContext().ensureActive()
         val lines = LyricParser.parse(result.first, result.second)
+        if (lines.isEmpty() && cached != null) return@withContext LoadedLyrics(parse(cached.content), cached.offsetMs, false,
+            "此次未返回同步歌词，正在显示缓存")
         if (lines.isNotEmpty()) dao.insertOrUpdate(LyricRecordEntity(track.id, "CACHED_ONLINE", gson.toJson(LyricPayload(result.first, result.second)), cached?.offsetMs ?: 0))
         LoadedLyrics(lines, cached?.offsetMs ?: 0, false)
     }
@@ -48,4 +64,13 @@ class LyricRepository(private val context: Context, private val database: PickAu
     }
 
     suspend fun saveOffset(trackId: String, offsetMs: Long) = withContext(Dispatchers.IO) { dao.updateOffset(trackId, offsetMs.coerceIn(-60000, 60000)) }
+    fun scheduleOffset(trackId: String, offsetMs: Long) {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            delay(200)
+            saveOffset(trackId, offsetMs)
+        }
+        offsetWrites.put(trackId, job)?.cancel()
+        job.invokeOnCompletion { offsetWrites.remove(trackId, job) }
+        job.start()
+    }
 }

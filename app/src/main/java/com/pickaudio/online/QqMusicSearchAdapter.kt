@@ -2,6 +2,9 @@ package com.pickaudio.online
 
 import com.google.gson.JsonParser
 import com.pickaudio.data.model.SearchSongItem
+import com.pickaudio.network.NetworkPolicy
+import com.pickaudio.network.readLimitedText
+import com.pickaudio.network.withResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -10,13 +13,16 @@ import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 object QqMusicSearchAdapter {
-    private val client = OkHttpClient.Builder()
+    private val client = NetworkPolicy.Default.client(OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .callTimeout(10, TimeUnit.SECONDS)
-        .build()
+        .build())
 
-    suspend fun search(keyword: String, page: Int = 1, pageSize: Int = 20): List<SearchSongItem> = withContext(Dispatchers.IO) {
+    suspend fun search(keyword: String, page: Int = 1, pageSize: Int = SEARCH_PAGE_SIZE): List<SearchSongItem> =
+        searchPage(keyword, page, pageSize).items
+    suspend fun searchPage(keyword: String, page: Int = 1, pageSize: Int = SEARCH_PAGE_SIZE): SearchPage = withContext(Dispatchers.IO) {
+        require(page >= 1 && pageSize in 1..100)
         val encoded = URLEncoder.encode(keyword, "UTF-8")
         val url = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?p=$page&n=$pageSize&w=$encoded&format=json"
 
@@ -26,15 +32,16 @@ object QqMusicSearchAdapter {
             .header("Referer", "https://y.qq.com/")
             .build()
 
-        val resp = client.newCall(req).execute()
-        check(resp.isSuccessful) { "QQ 音乐服务返回 ${resp.code}" }
-        val body = resp.body?.string() ?: return@withContext emptyList()
+        val body = client.withResponse(req) { resp ->
+            check(resp.isSuccessful) { "QQ 音乐服务返回 ${resp.code}" }
+            resp.body?.readLimitedText(2 * 1024 * 1024) ?: error("搜索响应为空")
+        }
         val root = JsonParser.parseString(body).asJsonObject
         check(root.get("code")?.asInt == 0) { "QQ 音乐搜索服务暂不可用" }
 
         val songList = root.getAsJsonObject("data")
             ?.getAsJsonObject("song")
-            ?.getAsJsonArray("list") ?: return@withContext emptyList()
+            ?.getAsJsonArray("list") ?: return@withContext SearchPage(emptyList(), null)
 
         val result = mutableListOf<SearchSongItem>()
         for (elem in songList) {
@@ -62,23 +69,29 @@ object QqMusicSearchAdapter {
                     artist = singerName,
                     album = albumname,
                     durationMs = durationSec * 1000L,
-                    coverUrl = coverUrl
+                    coverUrl = coverUrl,
+                    metadataJson = s.toString()
                 )
             )
         }
-        result
+        val total = runCatching { root.getAsJsonObject("data")?.getAsJsonObject("song")?.get("totalnum")?.asInt }.getOrNull()
+        val more = if (total != null) page.toLong() * pageSize < total else result.size >= pageSize
+        SearchPage(result, if (more) page + 1 else null, total)
     }
 
     suspend fun getLyric(songmid: String): Pair<String, String?> = withContext(Dispatchers.IO) {
-        val url = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=$songmid&format=json&nobase64=1"
+        val url = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=${URLEncoder.encode(songmid, "UTF-8")}&format=json&nobase64=1"
         val req = Request.Builder()
             .url(url)
             .header("User-Agent", "Mozilla/5.0")
             .header("Referer", "https://y.qq.com/")
             .build()
-        val resp = client.newCall(req).execute()
-        val body = resp.body?.string() ?: return@withContext Pair("", null)
+        val body = client.withResponse(req) { resp ->
+            check(resp.isSuccessful) { "歌词服务返回 ${resp.code}" }
+            resp.body?.readLimitedText(2 * 1024 * 1024) ?: error("歌词响应为空")
+        }
         val root = JsonParser.parseString(body).asJsonObject
+        check(root.get("code")?.asInt == 0) { "歌词服务暂不可用" }
 
         val lyric = root.get("lyric")?.asString ?: ""
         val trans = root.get("trans")?.asString

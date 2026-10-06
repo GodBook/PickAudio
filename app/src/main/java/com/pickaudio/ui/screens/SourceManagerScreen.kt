@@ -1,5 +1,8 @@
 package com.pickaudio.ui.screens
 
+import androidx.compose.ui.res.stringResource
+
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -22,9 +25,9 @@ import kotlinx.coroutines.*
 fun SourceManagerScreen(sourceManager: LxSourceManager, onBack: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val sources by sourceManager.getAllSources().collectAsState(initial = emptyList())
-    val selections by sourceManager.getPlatformSelections().collectAsState(initial = emptyList())
-    val health by sourceManager.sourceHealth.collectAsState()
+    val sources by sourceManager.getAllSources().collectAsStateWithLifecycle(initialValue = emptyList())
+    val selections by sourceManager.getPlatformSelections().collectAsStateWithLifecycle(initialValue = emptyList())
+    val health by sourceManager.sourceHealth.collectAsStateWithLifecycle()
     var urlDialog by remember { mutableStateOf(false) }
     var url by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -49,20 +52,20 @@ fun SourceManagerScreen(sourceManager: LxSourceManager, onBack: () -> Unit, modi
         }
     }
     Scaffold(topBar = {
-        TopAppBar(title = { Text("音乐源管理") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } })
+        TopAppBar(title = { Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_004)) }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(com.pickaudio.R.string.action_back)) } })
     }, modifier = modifier.fillMaxSize()) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item {
-                Text("在线音乐来源", style = MaterialTheme.typography.titleMedium)
-                Text("内置音源提供标准与高品质。使用自己的 LX 移动版脚本，可扩展平台或音质；每个平台只能选择支持它的音源。", style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_001), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_002), style = MaterialTheme.typography.bodyMedium)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { picker.launch(arrayOf("application/javascript", "text/javascript", "*/*")) }, enabled = !busy) { Text("导入本地脚本") }
-                    OutlinedButton(onClick = { urlDialog = true; error = null }, enabled = !busy) { Text("导入链接") }
+                    Button(onClick = { picker.launch(arrayOf("application/javascript", "text/javascript", "*/*")) }, enabled = !busy) { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_003)) }
+                    OutlinedButton(onClick = { urlDialog = true; error = null }, enabled = !busy) { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_004)) }
                 }
                 if (busy) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
-                    Text("正在读取并验证脚本…")
-                    TextButton(onClick = { importJob?.cancel(); busy = false }) { Text("取消导入") }
+                    Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_005))
+                    TextButton(onClick = { importJob?.cancel(); busy = false }) { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_006)) }
                 }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
@@ -86,38 +89,38 @@ fun SourceManagerScreen(sourceManager: LxSourceManager, onBack: () -> Unit, modi
                     }
                     Text(health[source.id] ?: "尚未测试", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { scope.launch { sourceManager.testSource(source) } }, enabled = health[source.id] != "正在测试") { Text("测试兼容性") }
-                        if (source.id != "builtin_aggregate") TextButton(onClick = { deleting = source }) { Text("删除音源", color = MaterialTheme.colorScheme.error) }
+                        TextButton(onClick = { scope.launch { sourceManager.testSource(source) } }, enabled = health[source.id] != "正在测试") { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_007)) }
+                        if (source.id != "builtin_aggregate") TextButton(onClick = { deleting = source }) { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_008), color = MaterialTheme.colorScheme.error) }
                     }
                     HorizontalDivider()
                 }
             }
         }
     }
-    if (urlDialog) AlertDialog(onDismissRequest = { importJob?.cancel(); urlDialog = false }, title = { Text("导入音乐源链接") }, text = {
-        Column { OutlinedTextField(url, { url = it }, label = { Text("HTTPS 脚本链接") }, singleLine = true); error?.let { Text(it, color = MaterialTheme.colorScheme.error) }; if (busy) LinearProgressIndicator(Modifier.fillMaxWidth()) }
-    }, confirmButton = { Button(onClick = { import { sourceManager.importSourceFromUrl(url.trim()) } }, enabled = !busy && url.trim().startsWith("https://")) { Text("导入并验证") } },
-        dismissButton = { TextButton(onClick = { importJob?.cancel(); urlDialog = false }) { Text("取消") } })
+    if (urlDialog) AlertDialog(onDismissRequest = { importJob?.cancel(); urlDialog = false }, title = { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_009)) }, text = {
+        Column { OutlinedTextField(url, { url = it }, label = { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_010)) }, singleLine = true); error?.let { Text(it, color = MaterialTheme.colorScheme.error) }; if (busy) LinearProgressIndicator(Modifier.fillMaxWidth()) }
+    }, confirmButton = { Button(onClick = { import { sourceManager.importSourceFromUrl(url.trim()) } }, enabled = !busy && url.trim().startsWith("https://")) { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_011)) } },
+        dismissButton = { TextButton(onClick = { importJob?.cancel(); urlDialog = false }) { Text(stringResource(com.pickaudio.R.string.action_cancel)) } })
     imported?.let { source ->
         val supported = sourceManager.capabilitiesForSource(source).keys.filter { it in listOf("wy", "tx") }
         var chosen by remember(source.id) { mutableStateOf(supported.toSet()) }
-        AlertDialog(onDismissRequest = { imported = null }, title = { Text("音源已导入") }, text = {
+        AlertDialog(onDismissRequest = { imported = null }, title = { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_012)) }, text = {
             Column {
                 Text("${source.name} · v${source.version}")
-                Text("选择使用此音源的平台：")
+                Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_013))
                 supported.forEach { platform ->
                     Row { Checkbox(platform in chosen, { checked -> chosen = if (checked) chosen + platform else chosen - platform }); Text(Platform.fromId(platform).displayName, modifier = Modifier.padding(top = 12.dp)) }
                 }
-                if (supported.isEmpty()) Text("此脚本没有声明支持网易云或 QQ 音乐，暂时无法用于当前搜索结果。")
+                if (supported.isEmpty()) Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_014))
             }
         }, confirmButton = { Button(enabled = chosen.isNotEmpty(), onClick = {
             scope.launch { chosen.forEach { sourceManager.selectSourceForPlatform(it, source.id) }; imported = null }
-        }) { Text("使用此音源") } }, dismissButton = { TextButton(onClick = { imported = null }) { Text("稍后配置") } })
+        }) { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_015)) } }, dismissButton = { TextButton(onClick = { imported = null }) { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_016)) } })
     }
     deleting?.let { source ->
-        AlertDialog(onDismissRequest = { deleting = null }, title = { Text("删除音乐源") }, text = { Text("删除「${source.name}」后，使用它的平台需要重新选择音源。") },
-            confirmButton = { TextButton(onClick = { deleting = null; scope.launch { sourceManager.deleteSource(source.id) } }) { Text("删除") } },
-            dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } })
+        AlertDialog(onDismissRequest = { deleting = null }, title = { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_017)) }, text = { Text("删除「${source.name}」后，使用它的平台需要重新选择音源。") },
+            confirmButton = { TextButton(onClick = { deleting = null; scope.launch { sourceManager.deleteSource(source.id) } }) { Text(stringResource(com.pickaudio.R.string.action_delete)) } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text(stringResource(com.pickaudio.R.string.action_cancel)) } })
     }
 }
 
@@ -129,10 +132,10 @@ fun PlatformSelectorRow(platformName: String, sources: List<SourceScriptEntity>,
         Box(Modifier.fillMaxWidth()) {
             FilledTonalButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) { Text(sources.find { it.id == selectedSourceId }?.name ?: "未配置 · 点击选择") }
             DropdownMenu(expanded, { expanded = false }) {
-                DropdownMenuItem(text = { Text("暂不使用在线音源") }, onClick = { onSelect(null); expanded = false })
+                DropdownMenuItem(text = { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_018)) }, onClick = { onSelect(null); expanded = false })
                 sources.forEach { source -> DropdownMenuItem(text = { Text(source.name) }, onClick = { onSelect(source.id); expanded = false }) }
             }
         }
-        if (sources.isEmpty()) Text("请导入支持此平台的音乐源。", style = MaterialTheme.typography.bodySmall)
+        if (sources.isEmpty()) Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_019), style = MaterialTheme.typography.bodySmall)
     }
 }

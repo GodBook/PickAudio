@@ -1,6 +1,7 @@
 package com.pickaudio.data.db
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -49,7 +50,11 @@ data class LocalAssetEntity(
     val format: String?, // mp3, flac, m4a, etc.
     val isAvailable: Boolean = true,
     val fileHash: String? = null,
-    val folderName: String = ""
+    val folderName: String = "",
+    @ColumnInfo(defaultValue = "''") val folderId: String = "",
+    @ColumnInfo(defaultValue = "''") val fileName: String = "",
+    val audioInfoJson: String? = null,
+    val unavailableReason: String? = null
 )
 
 @Entity(
@@ -133,7 +138,8 @@ data class PlaylistTrackEntity(
 )
 data class FavoriteEntity(
     @PrimaryKey val trackId: String,
-    val addedAt: Long = System.currentTimeMillis()
+    val addedAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "0") val sortOrder: Long = addedAt
 )
 
 @Entity(
@@ -165,7 +171,9 @@ data class PlaybackSnapshotEntity(
     val playbackMode: String = "SEQUENTIAL", // SEQUENTIAL, LIST_LOOP, SINGLE_LOOP, SHUFFLE
     val shuffleOrderJson: String? = null,
     val shuffleHistoryJson: String? = null,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val currentEntryId: Long? = null,
+    @ColumnInfo(defaultValue = "0") val queueRevision: Long = 0
 )
 
 @Entity(
@@ -233,7 +241,10 @@ data class DownloadTaskEntity(
     val bytesPerSecond: Long = 0L,
     val etaSeconds: Long? = null,
     val resourceEtag: String? = null,
-    val durationMs: Long = 0L
+    val durationMs: Long = 0L,
+    @ColumnInfo(defaultValue = "0") val executionGeneration: Long = 0L,
+    val publishToken: String? = null,
+    val publishStage: String? = null
 )
 
 @Entity(
@@ -262,4 +273,15 @@ data class ImportRootEntity(
     val displayName: String,
     val scanRulesJson: String? = null,
     val lastScanAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "restore_sessions", indices = [Index(value = ["state"])])
+data class RestoreSessionEntity(
+    @PrimaryKey val id: String,
+    val manifestJson: String,
+    val restoreSettings: Boolean,
+    val state: String,
+    val reportJson: String? = null,
+    val errorMessage: String? = null,
+    val createdAt: Long = System.currentTimeMillis()
 )

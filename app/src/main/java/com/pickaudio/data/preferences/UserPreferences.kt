@@ -26,6 +26,8 @@ class UserPreferences(private val context: Context) {
         val KEY_RECENT_TRACKS = stringPreferencesKey("recent_track_ids")
         val KEY_LYRIC_SIZE = intPreferencesKey("lyric_font_size")
         val KEY_LYRIC_TRANSLATION = booleanPreferencesKey("lyric_translation")
+        val KEY_AUDIO_CACHE_MB = intPreferencesKey("audio_cache_mb")
+        private val KEY_RESTORE_SESSION = stringPreferencesKey("last_restore_session")
     }
 
     val themeMode: Flow<ThemeMode> = context.dataStore.data.map { prefs ->
@@ -82,6 +84,8 @@ class UserPreferences(private val context: Context) {
 
     val lyricFontSize: Flow<Int> = context.dataStore.data.map { (it[KEY_LYRIC_SIZE] ?: 18).coerceIn(14, 28) }
     val showLyricTranslation: Flow<Boolean> = context.dataStore.data.map { it[KEY_LYRIC_TRANSLATION] ?: true }
+    val audioCacheMegabytes: Flow<Int> = context.dataStore.data.map { (it[KEY_AUDIO_CACHE_MB] ?: 256).takeIf { n -> n in listOf(64, 256, 1024) } ?: 256 }
+    suspend fun setAudioCacheMegabytes(value: Int) { require(value in listOf(64, 256, 1024)); context.dataStore.edit { it[KEY_AUDIO_CACHE_MB] = value } }
     suspend fun setLyricFontSize(value: Int) { context.dataStore.edit { it[KEY_LYRIC_SIZE] = value.coerceIn(14, 28) } }
     suspend fun setShowLyricTranslation(value: Boolean) { context.dataStore.edit { it[KEY_LYRIC_TRANSLATION] = value } }
 
@@ -93,12 +97,14 @@ class UserPreferences(private val context: Context) {
             "downloadQuality" to (prefs[KEY_DEFAULT_DOWNLOAD_QUALITY] ?: "320k"),
             "wifiOnly" to (prefs[KEY_WIFI_ONLY_DOWNLOAD] ?: true).toString(),
             "lyricSize" to (prefs[KEY_LYRIC_SIZE] ?: 18).toString(),
-            "translation" to (prefs[KEY_LYRIC_TRANSLATION] ?: true).toString()
+            "translation" to (prefs[KEY_LYRIC_TRANSLATION] ?: true).toString(),
+            "audioCacheMb" to (prefs[KEY_AUDIO_CACHE_MB] ?: 256).toString()
         )
     }.first()
 
-    suspend fun restoreSettings(values: Map<String, String>) {
+    suspend fun restoreSettings(values: Map<String, String>, restoreSessionId: String? = null) {
         context.dataStore.edit { prefs ->
+            if (restoreSessionId != null && prefs[KEY_RESTORE_SESSION] == restoreSessionId) return@edit
             values["theme"]?.takeIf { name -> ThemeMode.entries.any { it.name == name } }?.let { prefs[KEY_THEME] = it }
             values["filterShortAudio"]?.toBooleanStrictOrNull()?.let { prefs[KEY_FILTER_SHORT_AUDIO] = it }
             values["onlineQuality"]?.takeIf { value -> Quality.entries.any { it.value == value } }?.let { prefs[KEY_DEFAULT_ONLINE_QUALITY] = it }
@@ -106,6 +112,8 @@ class UserPreferences(private val context: Context) {
             values["wifiOnly"]?.toBooleanStrictOrNull()?.let { prefs[KEY_WIFI_ONLY_DOWNLOAD] = it }
             values["lyricSize"]?.toIntOrNull()?.let { prefs[KEY_LYRIC_SIZE] = it.coerceIn(14, 28) }
             values["translation"]?.toBooleanStrictOrNull()?.let { prefs[KEY_LYRIC_TRANSLATION] = it }
+            values["audioCacheMb"]?.toIntOrNull()?.takeIf { it in listOf(64, 256, 1024) }?.let { prefs[KEY_AUDIO_CACHE_MB] = it }
+            if (restoreSessionId != null) prefs[KEY_RESTORE_SESSION] = restoreSessionId
         }
     }
 

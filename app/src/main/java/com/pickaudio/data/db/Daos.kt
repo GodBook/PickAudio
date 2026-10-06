@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TrackDao {
+    @Query("SELECT * FROM tracks WHERE id IN (:ids)")
+    suspend fun getTracksByIds(ids: List<String>): List<TrackEntity>
     @Query("SELECT * FROM tracks ORDER BY createdAt DESC")
     fun getAllTracks(): Flow<List<TrackEntity>>
 
@@ -32,6 +34,12 @@ interface TrackDao {
 
 @Dao
 interface LocalAssetDao {
+    @Query("SELECT * FROM local_assets WHERE unavailableReason = '删除待确认'")
+    suspend fun getPendingDeletions(): List<LocalAssetEntity>
+    @Query("UPDATE local_assets SET audioInfoJson = :info WHERE id = :id")
+    suspend fun updateAudioInfo(id: Long, info: String)
+    @Query("SELECT * FROM local_assets WHERE trackId IN (:ids)")
+    suspend fun getAssetsForTracks(ids: List<String>): List<LocalAssetEntity>
     @Query("SELECT * FROM local_assets")
     fun getAllAssets(): Flow<List<LocalAssetEntity>>
     @Query("SELECT * FROM local_assets WHERE trackId = :trackId")
@@ -43,8 +51,10 @@ interface LocalAssetDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdate(asset: LocalAssetEntity): Long
 
-    @Query("UPDATE local_assets SET isAvailable = :available WHERE id = :id")
-    suspend fun updateAvailability(id: Long, available: Boolean)
+    @Query("UPDATE local_assets SET isAvailable = :available, unavailableReason = CASE WHEN :available THEN NULL ELSE :reason END WHERE id = :id AND (COALESCE(unavailableReason, '') != '删除待确认' OR :reason = '删除待确认')")
+    suspend fun updateAvailability(id: Long, available: Boolean, reason: String? = null)
+    @Query("UPDATE local_assets SET isAvailable = :available, unavailableReason = CASE WHEN :available THEN NULL ELSE :reason END WHERE id = :id AND unavailableReason = '删除待确认'")
+    suspend fun finishDeletion(id: Long, available: Boolean, reason: String? = null)
 
     @Query("DELETE FROM local_assets WHERE uri = :uri")
     suspend fun deleteByUri(uri: String)
@@ -55,6 +65,8 @@ interface LocalAssetDao {
 
 @Dao
 interface OnlineRefDao {
+    @Query("SELECT * FROM online_refs WHERE trackId IN (:ids)")
+    suspend fun getRefsForTracks(ids: List<String>): List<OnlineRefEntity>
     @Query("SELECT * FROM online_refs")
     fun getAllRefs(): Flow<List<OnlineRefEntity>>
     @Query("SELECT * FROM online_refs WHERE platform = :platform AND platformSongId = :songId LIMIT 1")
@@ -72,6 +84,19 @@ interface OnlineRefDao {
 
 @Dao
 interface PlaylistDao {
+    @Transaction
+    @Query("SELECT t.* FROM tracks t INNER JOIN playlist_tracks pt ON t.id = pt.trackId WHERE pt.playlistId = :id ORDER BY pt.sortOrder")
+    fun getTrackDetails(id: String): Flow<List<TrackDetails>>
+    @Query("""SELECT p.id,
+        CASE WHEN p.id = 'favorite' THEN (SELECT COUNT(*) FROM favorites)
+             ELSE (SELECT COUNT(*) FROM playlist_tracks pt WHERE pt.playlistId = p.id) END AS songCount,
+        CASE WHEN p.id = 'favorite' THEN
+             (SELECT t.coverUri FROM tracks t INNER JOIN favorites f ON t.id = f.trackId WHERE t.coverUri IS NOT NULL ORDER BY f.sortOrder DESC LIMIT 1)
+             ELSE (SELECT t.coverUri FROM tracks t INNER JOIN playlist_tracks pt ON t.id = pt.trackId WHERE pt.playlistId = p.id AND t.coverUri IS NOT NULL ORDER BY pt.sortOrder LIMIT 1)
+        END AS coverUri FROM playlists p""")
+    fun getSummaries(): Flow<List<PlaylistSummaryRow>>
+    @Query("SELECT * FROM playlist_tracks WHERE playlistId = :id ORDER BY sortOrder")
+    suspend fun getMembersSync(id: String): List<PlaylistTrackEntity>
     @Query("SELECT * FROM playlist_tracks ORDER BY sortOrder ASC")
     fun getAllMembers(): Flow<List<PlaylistTrackEntity>>
     @Query("UPDATE playlist_tracks SET sortOrder = :position WHERE playlistId = :playlistId AND trackId = :trackId")
@@ -112,9 +137,14 @@ interface PlaylistDao {
 
 @Dao
 interface FavoriteDao {
-    @Query("UPDATE favorites SET addedAt = :position WHERE trackId = :trackId")
+    @Transaction
+    @Query("SELECT t.* FROM tracks t INNER JOIN favorites f ON t.id = f.trackId ORDER BY f.sortOrder DESC, f.addedAt DESC")
+    fun getTrackDetails(): Flow<List<TrackDetails>>
+    @Query("SELECT * FROM favorites ORDER BY sortOrder DESC, addedAt DESC")
+    suspend fun getFavoritesSync(): List<FavoriteEntity>
+    @Query("UPDATE favorites SET sortOrder = :position WHERE trackId = :trackId")
     suspend fun updateOrder(trackId: String, position: Long)
-    @Query("SELECT t.* FROM tracks t INNER JOIN favorites f ON t.id = f.trackId ORDER BY f.addedAt DESC")
+    @Query("SELECT t.* FROM tracks t INNER JOIN favorites f ON t.id = f.trackId ORDER BY f.sortOrder DESC, f.addedAt DESC")
     fun getFavoriteTracks(): Flow<List<TrackEntity>>
 
     @Query("SELECT EXISTS(SELECT 1 FROM favorites WHERE trackId = :trackId)")
@@ -126,7 +156,7 @@ interface FavoriteDao {
     @Query("SELECT trackId FROM favorites")
     fun getAllFavoriteTrackIds(): Flow<List<String>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun addFavorite(fav: FavoriteEntity)
 
     @Query("DELETE FROM favorites WHERE trackId = :trackId")
@@ -135,6 +165,8 @@ interface FavoriteDao {
 
 @Dao
 interface QueueDao {
+    @Query("SELECT * FROM queue_entries ORDER BY queueOrder")
+    suspend fun getEntriesSync(): List<QueueEntryEntity>
     @Query("SELECT t.* FROM tracks t INNER JOIN queue_entries q ON t.id = q.trackId ORDER BY q.queueOrder ASC")
     fun getQueueTracks(): Flow<List<TrackEntity>>
 
@@ -191,6 +223,8 @@ interface SourceDao {
 
 @Dao
 interface DownloadDao {
+    @Query("SELECT COUNT(*) FROM download_tasks WHERE status != 'COMPLETED'")
+    fun getPendingCount(): Flow<Int>
     @Query("SELECT * FROM download_tasks ORDER BY createdAt ASC")
     suspend fun getAllTasksSync(): List<DownloadTaskEntity>
 
@@ -226,6 +260,10 @@ interface DownloadDao {
 
 @Dao
 interface LyricDao {
+    @Query("SELECT * FROM lyric_records")
+    suspend fun getAllLyrics(): List<LyricRecordEntity>
+    @Query("SELECT COALESCE(SUM(LENGTH(content)), 0) FROM lyric_records")
+    suspend fun getLyricCharacterCount(): Long
     @Query("SELECT * FROM lyric_records WHERE trackId = :trackId LIMIT 1")
     suspend fun getLyricForTrack(trackId: String): LyricRecordEntity?
 
@@ -249,4 +287,19 @@ interface ImportRootDao {
 
     @Query("DELETE FROM import_roots WHERE uri = :uri")
     suspend fun delete(uri: String)
+}
+
+@Dao
+interface RestoreSessionDao {
+    @Query("SELECT * FROM restore_sessions WHERE state != 'COMPLETED' ORDER BY createdAt")
+    fun getPending(): Flow<List<RestoreSessionEntity>>
+
+    @Query("SELECT * FROM restore_sessions WHERE id = :id")
+    suspend fun getById(id: String): RestoreSessionEntity?
+
+    @Upsert
+    suspend fun save(session: RestoreSessionEntity)
+
+    @Query("DELETE FROM restore_sessions WHERE state = 'COMPLETED' AND createdAt < :before")
+    suspend fun pruneCompleted(before: Long)
 }

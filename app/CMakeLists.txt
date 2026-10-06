@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("quickjs_bridge")
 
-add_definitions(-D_GNU_SOURCE -DCONFIG_VERSION=\"2024-01-13\")
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/quickjs/VERSION" QUICKJS_VERSION LIMIT_COUNT 1)
+add_definitions(-D_GNU_SOURCE -DCONFIG_VERSION=\"${QUICKJS_VERSION}\")
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -Wall -Wno-unused-parameter -Wno-sign-compare")
 # Ensure 16KB page size alignment for Android 16 (API 36)

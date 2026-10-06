@@ -1,5 +1,8 @@
 package com.pickaudio
 
+import androidx.compose.ui.res.stringResource
+
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -14,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -22,6 +26,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.pickaudio.data.model.ThemeMode
 import com.pickaudio.ui.components.MiniPlayer
+import com.pickaudio.ui.components.ConnectedMiniPlayer
 import com.pickaudio.ui.screens.*
 import com.pickaudio.ui.theme.PickAudioTheme
 import kotlinx.coroutines.launch
@@ -37,6 +42,7 @@ sealed class Screen(val route: String, val title: String) {
         fun createRoute(id: String, name: String) = "playlist_detail/${android.net.Uri.encode(id)}/${android.net.Uri.encode(name)}"
     }
 }
+val LocalPlayerOverlayVisible = staticCompositionLocalOf { false }
 
 class MainActivity : ComponentActivity() {
     var openDownloadsVersion by mutableIntStateOf(0)
@@ -55,7 +61,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val userPrefs = app.userPreferences
             val coordinator = app.playbackCoordinator
-            val themeMode by userPrefs.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
+            val themeMode by userPrefs.themeMode.collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
 
             PickAudioTheme(themeMode = themeMode) {
                 MainApp(app = app)
@@ -72,17 +78,15 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
     val context = androidx.compose.ui.platform.LocalContext.current
 
     val coordinator = app.playbackCoordinator
-    val currentTrack by coordinator.currentTrack.collectAsState()
-    val isPlaying by coordinator.isPlaying.collectAsState()
-    val progressMs by coordinator.currentPositionMs.collectAsState()
-    val durationMs by coordinator.durationMs.collectAsState()
-    val playbackState by coordinator.uiState.collectAsState()
+    val currentTrack by coordinator.currentTrack.collectAsStateWithLifecycle()
     val mainSnackbar = remember { SnackbarHostState() }
 
-    var showFullPlayer by remember { mutableStateOf(false) }
+    var showFullPlayer by rememberSaveable { mutableStateOf(false) }
+    var pendingOpenPlayer by rememberSaveable { mutableStateOf(false) }
+    val restored by coordinator.restored.collectAsStateWithLifecycle()
     var retryAfterSource by remember { mutableStateOf(false) }
     var currentRoute by remember { mutableStateOf(Screen.Library.route) }
-    LaunchedEffect(currentTrack?.id) { if (currentTrack == null) showFullPlayer = false }
+    LaunchedEffect(currentTrack?.id, restored) { if (currentTrack == null && restored) showFullPlayer = false }
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val activeRoute = navBackStackEntry?.destination?.route ?: currentRoute
     LaunchedEffect(activeRoute) {
@@ -93,7 +97,21 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
         }
     }
     LaunchedEffect((context as? MainActivity)?.openDownloadsVersion) {
-        if ((context as? MainActivity)?.intent?.getBooleanExtra("open_downloads", false) == true) navController.navigate(Screen.Download.route)
+        val activity = context as? MainActivity
+        if (activity?.intent?.getBooleanExtra("open_downloads", false) == true) {
+            activity.intent.removeExtra("open_downloads")
+            navController.navigate(Screen.Download.route) { launchSingleTop = true }
+        }
+        if (activity?.intent?.getBooleanExtra("open_player", false) == true) {
+            activity.intent.removeExtra("open_player")
+            pendingOpenPlayer = true
+        }
+    }
+    LaunchedEffect(pendingOpenPlayer, restored, currentTrack?.id) {
+        if (pendingOpenPlayer && (currentTrack != null || restored)) {
+            showFullPlayer = currentTrack != null
+            pendingOpenPlayer = false
+        }
     }
 
     // Favorite status for current track
@@ -103,13 +121,14 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
         } else {
             kotlinx.coroutines.flow.flowOf(false)
         }
-    }.collectAsState(initial = false)
+    }.collectAsStateWithLifecycle(initialValue = false)
 
     // Back handler for full player
     BackHandler(enabled = showFullPlayer) {
         showFullPlayer = false
     }
 
+    CompositionLocalProvider(LocalPlayerOverlayVisible provides showFullPlayer) {
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -118,16 +137,7 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
                 Column {
                     // Mini player floating above bottom bar
                     if (currentTrack != null && !showFullPlayer) {
-                        MiniPlayer(
-                            currentTrack = currentTrack,
-                            isPlaying = isPlaying,
-                            progressMs = progressMs,
-                            durationMs = durationMs,
-                            onPlayPauseClick = { coordinator.playOrPause() },
-                            onNextClick = { coordinator.next() },
-                            onClick = { showFullPlayer = true }
-                            , playbackState = playbackState
-                        )
+                        ConnectedMiniPlayer(coordinator, onClick = { showFullPlayer = true })
                     }
 
                     NavigationBar {
@@ -141,8 +151,8 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
                                     restoreState = true
                                 }
                             },
-                            icon = { Icon(Icons.Default.LibraryMusic, contentDescription = "曲库") },
-                            label = { Text("曲库") }
+                            icon = { Icon(Icons.Default.LibraryMusic, contentDescription = stringResource(com.pickaudio.R.string.ui_mainactivity_001)) },
+                            label = { Text(stringResource(com.pickaudio.R.string.ui_mainactivity_001)) }
                         )
                         NavigationBarItem(
                             selected = activeRoute == Screen.Playlists.route || activeRoute == Screen.PlaylistDetail.route,
@@ -154,8 +164,8 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
                                     restoreState = true
                                 }
                             },
-                            icon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "歌单") },
-                            label = { Text("歌单") }
+                            icon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = stringResource(com.pickaudio.R.string.ui_mainactivity_002)) },
+                            label = { Text(stringResource(com.pickaudio.R.string.ui_mainactivity_002)) }
                         )
                         NavigationBarItem(
                             selected = activeRoute == Screen.Search.route,
@@ -167,8 +177,8 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
                                     restoreState = true
                                 }
                             },
-                            icon = { Icon(Icons.Default.Search, contentDescription = "搜索") },
-                            label = { Text("搜索") }
+                            icon = { Icon(Icons.Default.Search, contentDescription = stringResource(com.pickaudio.R.string.ui_mainactivity_003)) },
+                            label = { Text(stringResource(com.pickaudio.R.string.ui_mainactivity_003)) }
                         )
                     }
                 }
@@ -298,5 +308,6 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
                 )
             }
         }
+    }
     }
 }

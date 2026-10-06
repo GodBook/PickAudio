@@ -2,6 +2,9 @@ package com.pickaudio.online
 
 import com.google.gson.JsonParser
 import com.pickaudio.data.model.SearchSongItem
+import com.pickaudio.network.NetworkPolicy
+import com.pickaudio.network.readLimitedText
+import com.pickaudio.network.withResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -10,13 +13,16 @@ import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 object NetEaseSearchAdapter {
-    private val client = OkHttpClient.Builder()
+    private val client = NetworkPolicy.Default.client(OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .callTimeout(10, TimeUnit.SECONDS)
-        .build()
+        .build())
 
-    suspend fun search(keyword: String, page: Int = 1, pageSize: Int = 20): List<SearchSongItem> = withContext(Dispatchers.IO) {
+    suspend fun search(keyword: String, page: Int = 1, pageSize: Int = SEARCH_PAGE_SIZE): List<SearchSongItem> =
+        searchPage(keyword, page, pageSize).items
+    suspend fun searchPage(keyword: String, page: Int = 1, pageSize: Int = SEARCH_PAGE_SIZE): SearchPage = withContext(Dispatchers.IO) {
+        require(page >= 1 && pageSize in 1..100)
         val offset = (page - 1) * pageSize
         val encoded = URLEncoder.encode(keyword, "UTF-8")
         val url = "https://music.163.com/api/search/get/web?s=$encoded&type=1&offset=$offset&limit=$pageSize"
@@ -26,13 +32,14 @@ object NetEaseSearchAdapter {
             .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
             .build()
 
-        val resp = client.newCall(req).execute()
-        check(resp.isSuccessful) { "网易云服务返回 ${resp.code}" }
-        val body = resp.body?.string() ?: return@withContext emptyList()
+        val body = client.withResponse(req) { resp ->
+            check(resp.isSuccessful) { "网易云服务返回 ${resp.code}" }
+            resp.body?.readLimitedText(2 * 1024 * 1024) ?: error("搜索响应为空")
+        }
         val root = JsonParser.parseString(body).asJsonObject
         check(root.get("code")?.asInt == 200) { "网易云搜索服务暂不可用" }
 
-        val songsArray = root.getAsJsonObject("result")?.getAsJsonArray("songs") ?: return@withContext emptyList()
+        val songsArray = root.getAsJsonObject("result")?.getAsJsonArray("songs") ?: return@withContext SearchPage(emptyList(), null)
         val result = mutableListOf<SearchSongItem>()
 
         for (elem in songsArray) {
@@ -57,22 +64,28 @@ object NetEaseSearchAdapter {
                     artist = artistName,
                     album = albumName,
                     durationMs = duration,
-                    coverUrl = picUrl
+                    coverUrl = picUrl,
+                    metadataJson = s.toString()
                 )
             )
         }
-        result
+        val total = runCatching { root.getAsJsonObject("result")?.get("songCount")?.asInt }.getOrNull()
+        val more = if (total != null) page.toLong() * pageSize < total else result.size >= pageSize
+        SearchPage(result, if (more) page + 1 else null, total)
     }
 
     suspend fun getLyric(songId: String): Pair<String, String?> = withContext(Dispatchers.IO) {
-        val url = "https://music.163.com/api/song/lyric?id=$songId&lv=1&kv=1&tv=-1"
+        val url = "https://music.163.com/api/song/lyric?id=${URLEncoder.encode(songId, "UTF-8")}&lv=1&kv=1&tv=-1"
         val req = Request.Builder()
             .url(url)
             .header("User-Agent", "Mozilla/5.0")
             .build()
-        val resp = client.newCall(req).execute()
-        val body = resp.body?.string() ?: return@withContext Pair("", null)
+        val body = client.withResponse(req) { resp ->
+            check(resp.isSuccessful) { "歌词服务返回 ${resp.code}" }
+            resp.body?.readLimitedText(2 * 1024 * 1024) ?: error("歌词响应为空")
+        }
         val root = JsonParser.parseString(body).asJsonObject
+        check(root.get("code")?.asInt == 200) { "歌词服务暂不可用" }
 
         val lyric = root.getAsJsonObject("lrc")?.get("lyric")?.asString ?: ""
         val tlyric = root.getAsJsonObject("tlyric")?.get("lyric")?.asString

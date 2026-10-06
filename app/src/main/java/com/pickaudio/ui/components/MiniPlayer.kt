@@ -1,5 +1,7 @@
 package com.pickaudio.ui.components
 
+import androidx.compose.ui.res.stringResource
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -23,6 +25,20 @@ import coil.compose.AsyncImage
 import com.pickaudio.data.model.Track
 import com.pickaudio.data.model.PlaybackUiState
 import com.pickaudio.data.model.PlaybackPhase
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.pickaudio.playback.PlaybackCoordinator
+
+@Composable
+fun ConnectedMiniPlayer(coordinator: PlaybackCoordinator, onClick: () -> Unit) {
+    val track by coordinator.currentTrack.collectAsStateWithLifecycle()
+    val playing by coordinator.isPlaying.collectAsStateWithLifecycle()
+    val progress by coordinator.currentPositionMs.collectAsStateWithLifecycle()
+    val duration by coordinator.durationMs.collectAsStateWithLifecycle()
+    val state by coordinator.uiState.collectAsStateWithLifecycle()
+    MiniPlayer(track, playing, progress, duration, coordinator::playOrPause, coordinator::next, onClick,
+        playbackState = state)
+}
 
 @Composable
 fun MiniPlayer(
@@ -117,7 +133,7 @@ fun MiniPlayer(
                 ) {
                     Icon(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "暂停" else "播放",
+                        contentDescription = stringResource(if (isPlaying) com.pickaudio.R.string.action_pause else com.pickaudio.R.string.action_play),
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -128,7 +144,7 @@ fun MiniPlayer(
                 IconButton(onClick = onNextClick, modifier = Modifier.size(48.dp)) {
                     Icon(
                         imageVector = Icons.Default.SkipNext,
-                        contentDescription = "下一首",
+                        contentDescription = stringResource(com.pickaudio.R.string.action_next),
                         modifier = Modifier.size(24.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )

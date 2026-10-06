@@ -1,5 +1,8 @@
 package com.pickaudio.ui.screens
 
+import androidx.compose.ui.res.stringResource
+
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -31,57 +34,71 @@ fun PlaylistDetailScreen(
     val app = LocalContext.current.applicationContext as PickAudioApplication
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
-    val storedTracks by remember(playlistId) { playlistRepository.getTracksForPlaylist(playlistId) }.collectAsState(initial = emptyList())
-    val playlists by playlistRepository.getAllPlaylists().collectAsState(initial = emptyList())
-    val current by playbackCoordinator.currentTrack.collectAsState()
-    val playing by playbackCoordinator.isPlaying.collectAsState()
+    val storedTracks by remember(playlistId) { playlistRepository.getTracksForPlaylist(playlistId) }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val playlists by playlistRepository.getAllPlaylists().collectAsStateWithLifecycle(initialValue = emptyList())
+    val current by playbackCoordinator.currentTrack.collectAsStateWithLifecycle()
+    val playing by playbackCoordinator.isPlaying.collectAsStateWithLifecycle()
     var ordered by remember(playlistId) { mutableStateOf<List<Track>>(emptyList()) }
     var reordering by remember { mutableStateOf(false) }
+    var savingOrder by remember { mutableStateOf(false) }
+    var baseOrder by remember { mutableStateOf<List<String>>(emptyList()) }
     var query by remember { mutableStateOf("") }
     var selecting by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    androidx.activity.compose.BackHandler(enabled = selecting && !com.pickaudio.LocalPlayerOverlayVisible.current) { selecting = false; selectedIds = emptySet() }
     var addTracks by remember { mutableStateOf<List<Track>?>(null) }
     var downloadTracks by remember { mutableStateOf<List<Track>?>(null) }
     val listState = rememberLazyListState()
-    LaunchedEffect(storedTracks) { if (!reordering) ordered = storedTracks }
+    LaunchedEffect(storedTracks, reordering) { if (!reordering) ordered = storedTracks }
     val tracks = ordered.filter { query.isBlank() || it.title.contains(query, true) || it.artist.contains(query, true) || it.album.contains(query, true) }
     val selected = tracks.filter { it.id in selectedIds }
     fun select(id: String) { selecting = true; selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id }
     fun remove(list: List<Track>) {
         scope.launch {
-            playlistRepository.removeTracks(playlistId, list.map { it.id })
+            val removed = playlistRepository.removeWithUndo(playlistId, list.map { it.id })
             selectedIds = emptySet()
             val result = snack.showSnackbar("已移除 ${list.size} 首，音频文件保留", "撤销")
-            if (result == SnackbarResult.ActionPerformed) playlistRepository.addTracks(playlistId, list)
+            if (result == SnackbarResult.ActionPerformed) {
+                try { snack.showSnackbar("已恢复 ${playlistRepository.restoreRemoved(removed)} 首，原位置和添加时间保留") }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (e: Exception) { snack.showSnackbar("撤销失败：${e.message}") }
+            }
         }
     }
     fun finishOrder() {
+        if (!reordering || savingOrder) return
         val ids = ordered.map { it.id }
-        scope.launch { playlistRepository.reorderTracks(playlistId, ids); reordering = false }
+        savingOrder = true
+        scope.launch {
+            try { playlistRepository.reorderTracks(playlistId, ids, baseOrder) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { snack.showSnackbar("排序未保存：${e.message}") }
+            finally { reordering = false; savingOrder = false }
+        }
     }
     Scaffold(topBar = {
         TopAppBar(title = { Text(playlists.find { it.id == playlistId }?.name ?: playlistName) },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(com.pickaudio.R.string.action_back)) } },
             actions = { TextButton(onClick = { selecting = !selecting; selectedIds = emptySet() }) { Text(if (selecting) "完成" else "多选") } })
     }, snackbarHost = { SnackbarHost(snack) }, modifier = modifier.fillMaxSize()) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            OutlinedTextField(query, { query = it }, placeholder = { Text("在歌单中搜索") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(16.dp))
+            OutlinedTextField(query, { query = it }, placeholder = { Text(stringResource(com.pickaudio.R.string.ui_playlistdetailscreen_001)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(16.dp))
             FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = { playbackCoordinator.setPlaybackMode(PlaybackMode.SEQUENTIAL); playbackCoordinator.setQueueAndPlay(tracks) }, enabled = tracks.isNotEmpty()) { Text("播放全部") }
-                OutlinedButton(onClick = { playbackCoordinator.setPlaybackMode(PlaybackMode.SHUFFLE); playbackCoordinator.setQueueAndPlay(tracks.shuffled()) }, enabled = tracks.isNotEmpty()) { Text("随机播放") }
+                FilledTonalButton(onClick = { playbackCoordinator.setPlaybackMode(PlaybackMode.SEQUENTIAL); playbackCoordinator.setQueueAndPlay(tracks) }, enabled = tracks.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.ui_libraryscreen_012)) }
+                OutlinedButton(onClick = { playbackCoordinator.setPlaybackMode(PlaybackMode.SHUFFLE); playbackCoordinator.setQueueAndPlay(tracks.shuffled()) }, enabled = tracks.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.ui_playlistdetailscreen_002)) }
                 Text("${tracks.size} 首 · 长按多选，拖动右侧排序", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(vertical = 12.dp))
             }
             if (selecting) FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = { selectedIds = tracks.map { it.id }.toSet() }) { Text("全选 (${selectedIds.size})") }
-                TextButton(onClick = { addTracks = selected }, enabled = selected.isNotEmpty()) { Text("加入歌单") }
-                TextButton(onClick = { downloadTracks = selected }, enabled = selected.any { it.platform != null }) { Text("下载") }
-                TextButton(onClick = { remove(selected) }, enabled = selected.isNotEmpty()) { Text("移除") }
+                TextButton(onClick = { addTracks = selected }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.action_add_playlist)) }
+                TextButton(onClick = { downloadTracks = selected }, enabled = selected.any { it.platform != null }) { Text(stringResource(com.pickaudio.R.string.action_download)) }
+                TextButton(onClick = { remove(selected) }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.action_remove)) }
             }
             LazyColumn(Modifier.weight(1f), state = listState, contentPadding = PaddingValues(bottom = 16.dp)) {
                 if (tracks.isEmpty()) item {
                     Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(if (query.isBlank()) "歌单暂无歌曲" else "没有匹配歌曲")
-                        Text("可在音乐库或搜索结果中选择“加入歌单”。", style = MaterialTheme.typography.bodyMedium)
+                        Text(stringResource(com.pickaudio.R.string.ui_playlistdetailscreen_003), style = MaterialTheme.typography.bodyMedium)
                     }
                 }
                 itemsIndexed(tracks, key = { _, item -> item.id }) { index, track ->
@@ -95,7 +112,8 @@ fun PlaylistDetailScreen(
                     actions.add(TrackMenuAction("从歌单移除", true) { remove(listOf(track)) })
                     MusicTrackRow(track, current?.id == track.id, playing, selecting, track.id in selectedIds,
                         onClick = { playbackCoordinator.setQueueAndPlay(tracks, index) }, onSelect = { select(track.id) }, actions = actions,
-                        trailing = { if (query.isBlank()) ReorderHandle(track.id, index, tracks.size, listState, { from, to ->
+                        trailing = { if (query.isBlank() && !savingOrder) ReorderHandle(track.id, index, tracks.size, listState, { from, to ->
+                            if (!reordering) baseOrder = storedTracks.map { it.id }
                             reordering = true
                             ordered = ordered.toMutableList().apply { add(to, removeAt(from)) }
                         }, ::finishOrder) })
@@ -103,6 +121,7 @@ fun PlaylistDetailScreen(
             }
         }
     }
-    addTracks?.let { PlaylistPickerDialog(it, playlistRepository, { addTracks = null }) }
-    downloadTracks?.let { DownloadQualityDialog(it, app.downloadCoordinator, app.sourceManager, app.userPreferences, { downloadTracks = null }, onOpenSource) }
+    addTracks?.let { PlaylistPickerDialog(it, playlistRepository, { addTracks = null }, { result -> scope.launch { snack.showSnackbar(result) } }) }
+    downloadTracks?.let { DownloadQualityDialog(it, app.downloadCoordinator, app.sourceManager, app.userPreferences, { downloadTracks = null }, onOpenSource,
+        { result -> scope.launch { snack.showSnackbar(result.summary) } }) }
 }

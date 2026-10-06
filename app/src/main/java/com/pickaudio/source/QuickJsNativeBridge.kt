@@ -4,6 +4,8 @@ interface QuickJsHostCallback {
     fun onConsoleLog(level: String, message: String)
     fun onLxSend(eventName: String, dataJson: String)
     fun onLxRequest(reqId: Long, url: String, optionsJson: String)
+    fun md5(value: ByteArray): String = java.security.MessageDigest.getInstance("MD5")
+        .digest(value).joinToString("") { "%02x".format(it) }
 }
 
 object QuickJsNativeBridge {
@@ -25,4 +27,5 @@ object QuickJsNativeBridge {
     external fun nativeResolveLxRequestCallback(ctxPtr: Long, reqId: Long, isErr: Boolean, dataJson: String?)
     external fun nativeDestroyContext(ctxPtr: Long)
     external fun nativeDestroyRuntime(rtPtr: Long)
+    external fun nativeMemoryUsage(rtPtr: Long): Long
 }

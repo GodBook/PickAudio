@@ -1,5 +1,7 @@
 package com.pickaudio.ui.components
 
+import androidx.compose.ui.res.stringResource
+
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -37,12 +39,18 @@ fun MusicTrackRow(
     actions: List<TrackMenuAction> = emptyList(), trailing: (@Composable () -> Unit)? = null
 ) {
     var menu by remember(track.id) { mutableStateOf(false) }
+    val rowState = stringResource(if (selecting) {
+        if (selected) com.pickaudio.R.string.selection_selected else com.pickaudio.R.string.selection_unselected
+    } else if (isPlaying) com.pickaudio.R.string.playback_playing else com.pickaudio.R.string.playback_current_paused)
     val origin = if (track.localUri != null) { if (track.sourceType == "DOWNLOADED") "已下载" else "本地" }
         else track.platform?.let { Platform.fromId(it).displayName } ?: "待关联文件"
     Surface(color = if (selected || isCurrent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f) else MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth().combinedClickable(
             onClick = { if (selecting) onSelect() else onClick() }, onLongClick = onSelect
-        ).semantics { if (selecting) this.selected = selected }) {
+        ).semantics {
+            if (selecting) { this.selected = selected; stateDescription = rowState }
+            else if (isCurrent) stateDescription = rowState
+        }) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.Top) {
             if (selecting) Checkbox(selected, { onSelect() })
             else Box(Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
@@ -73,6 +81,8 @@ fun MusicTrackRow(
                 Text("$origin · ${formatMusicTime(track.durationMs)}${if (isCurrent) if (isPlaying) " · 正在播放" else " · 当前歌曲" else ""}",
                     style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis,
                     color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                track.repairReason?.let { Text(it, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error, maxLines = 2, overflow = TextOverflow.Ellipsis) }
             }
         }
     }
@@ -85,7 +95,7 @@ fun ReorderHandle(key: String, index: Int, count: Int, listState: LazyListState,
     val move by rememberUpdatedState(onMove)
     val finish by rememberUpdatedState(onFinish)
     val scope = rememberCoroutineScope()
-    Icon(Icons.Default.DragHandle, contentDescription = "拖动排序", modifier = Modifier.size(48.dp).padding(12.dp)
+    Icon(Icons.Default.DragHandle, contentDescription = stringResource(com.pickaudio.R.string.ui_musictrackrow_001), modifier = Modifier.size(48.dp).padding(12.dp)
         .semantics {
             customActions = listOf(
                 CustomAccessibilityAction("向上移动") { if (currentIndex > 0) { move(currentIndex, currentIndex - 1); finish(); true } else false },

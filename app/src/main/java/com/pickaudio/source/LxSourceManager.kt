@@ -1,6 +1,7 @@
 package com.pickaudio.source
 
 import android.content.Context
+import android.net.Network
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -15,14 +16,18 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
-import java.net.InetAddress
-import java.net.URL
+import com.pickaudio.network.NetworkPolicy
+import com.pickaudio.network.readLimitedText
+import com.pickaudio.network.withResponse
+import java.io.Closeable
+import java.net.URLEncoder
+import java.util.concurrent.atomic.AtomicInteger
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -45,29 +50,45 @@ data class SourcePlatformCapability(
 
 class LxSourceManager(
     private val context: Context,
-    private val database: PickAudioDatabase
-) {
+    private val database: PickAudioDatabase,
+    private val networkPolicy: NetworkPolicy = NetworkPolicy.Default
+) : Closeable {
     private val sourceDao = database.sourceDao()
     private val gson = Gson()
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, e ->
+        Log.e("LxSourceManager", "Source background operation failed", e)
+    })
 
     // OkHttp client for script requests
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(15, TimeUnit.SECONDS)
         .build()
 
     // Fast OkHttp client for quick API probing with 3s timeout
     private val quickHttpClient = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(3, TimeUnit.SECONDS)
+        .callTimeout(3, TimeUnit.SECONDS)
         .build()
 
-    // Active runtime instances per source ID
-    private val activeEngines = ConcurrentHashMap<String, QuickJsEngine>()
-    private val sourceCapabilities = ConcurrentHashMap<String, Map<String, SourcePlatformCapability>>()
-    private val engineLocks = ConcurrentHashMap<String, Mutex>()
+    // A runtime belongs to one operation; finishing, cancelling or deleting its source closes it.
+    private class Session(val sourceId: String?, val engine: QuickJsEngine, val job: CompletableJob,
+        val client: OkHttpClient, val pending: AtomicInteger = AtomicInteger())
+    private val activeSessions = ConcurrentHashMap<QuickJsEngine, Session>()
+    private val engineSlots = Semaphore(4)
+    private val networkSlots = Semaphore(8)
+
+    fun audioClient(base: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS).build(), network: Network? = null): OkHttpClient {
+        val routed = if (network == null) base else base.newBuilder().socketFactory(network.socketFactory)
+            .dns(object : Dns {
+                override fun lookup(hostname: String) = network.getAllByName(hostname).toList()
+            }).build()
+        return networkPolicy.client(routed)
+    }
     private val _sourceHealth = MutableStateFlow<Map<String, String>>(emptyMap())
     val sourceHealth = _sourceHealth.asStateFlow()
 
@@ -109,8 +130,10 @@ class LxSourceManager(
         }
     }
 
-    fun getAllSources(): Flow<List<SourceScriptEntity>> = sourceDao.getAllSources()
-    fun getPlatformSelections(): Flow<List<PlatformSourceSelectionEntity>> = sourceDao.getPlatformSelections()
+    private val sourcesFlow = sourceDao.getAllSources()
+    private val selectionsFlow = sourceDao.getPlatformSelections()
+    fun getAllSources(): Flow<List<SourceScriptEntity>> = sourcesFlow
+    fun getPlatformSelections(): Flow<List<PlatformSourceSelectionEntity>> = selectionsFlow
 
     fun parseSourceHeader(content: String): SourceInfo {
         var name = "未命名音源"
@@ -188,12 +211,11 @@ class LxSourceManager(
         if (!url.startsWith("https://", ignoreCase = true)) {
             throw IllegalArgumentException("仅支持安全的 HTTPS 脚本链接")
         }
-        val req = Request.Builder().url(url).build()
-        val resp = okHttpClient.newCall(req).execute()
-        if (!resp.isSuccessful) {
-            throw IOException("下载脚本失败: HTTP ${resp.code}")
+        val req = Request.Builder().url(networkPolicy.validate(url)).build()
+        val body = networkPolicy.client(okHttpClient, httpsOnly = true).withResponse(req) { resp ->
+            if (!resp.isSuccessful) throw IOException("下载脚本失败: HTTP ${resp.code}")
+            resp.body?.readLimitedText(5 * 1024 * 1024) ?: throw IOException("脚本内容为空")
         }
-        val body = resp.body?.string() ?: throw IOException("脚本内容为空")
         importSourceFromCode(body)
     }
 
@@ -214,39 +236,42 @@ class LxSourceManager(
     }
 
     private suspend fun testInitialize(code: String): Map<String, SourcePlatformCapability> = withTimeout(15000) {
-        val engine = QuickJsEngine()
-        val capabilities = CompletableDeferred<Map<String, SourcePlatformCapability>>()
+        withEngine(code, null, null) { _, capabilities -> capabilities }
+    }
 
-        val callback = object : QuickJsHostCallback {
-            override fun onConsoleLog(level: String, message: String) {
-                Log.d("LX_Script", "[$level] $message")
-            }
-
-            override fun onLxSend(eventName: String, dataJson: String) {
-                if (eventName == "inited") {
-                    try {
-                        val parsed = parseInitedSources(dataJson)
-                        capabilities.complete(parsed)
-                    } catch (e: Exception) {
-                        capabilities.completeExceptionally(e)
+    private suspend fun <T> withEngine(code: String, sourceId: String?, network: Network?,
+        use: suspend (QuickJsEngine, Map<String, SourcePlatformCapability>) -> T): T = engineSlots.withPermit {
+        coroutineScope {
+            check(scope.isActive) { "音乐源管理器已关闭" }
+            val engine = QuickJsEngine()
+            val session = Session(sourceId, engine, SupervisorJob(currentCoroutineContext().job), audioClient(okHttpClient, network))
+            activeSessions[engine] = session
+            val initialized = CompletableDeferred<Map<String, SourcePlatformCapability>>(session.job)
+            try {
+                engine.registerHostBridge(object : QuickJsHostCallback {
+                    override fun onConsoleLog(level: String, message: String) { Log.d("LX_Script", "[$level] $message") }
+                    override fun onLxSend(eventName: String, dataJson: String) {
+                        if (eventName == "inited") {
+                            try {
+                                val root = JsonParser.parseString(dataJson).asJsonObject
+                                require(root.get("status")?.asBoolean != false) { root.get("message")?.asString ?: "音源初始化失败" }
+                                initialized.complete(parseInitedSources(dataJson))
+                            } catch (e: Exception) { initialized.completeExceptionally(e) }
+                        }
                     }
-                }
-            }
-
-            override fun onLxRequest(reqId: Long, url: String, optionsJson: String) {
-                dispatchNetworkRequest(engine, reqId, url, optionsJson)
+                    override fun onLxRequest(reqId: Long, url: String, optionsJson: String) {
+                        check(session.pending.incrementAndGet() <= 32) { "音源同时请求过多" }
+                        dispatchNetworkRequest(session, reqId, url, optionsJson)
+                    }
+                })
+                engine.evaluate(code, "source.js")
+                use(engine, initialized.await())
+            } finally {
+                activeSessions.remove(engine)
+                session.job.cancel()
+                engine.close()
             }
         }
-
-        engine.registerHostBridge(callback)
-        try {
-            engine.evaluate(code, "source.js")
-            engine.executePendingJobs()
-            val result = capabilities.await()
-            result
-        } catch (e: TimeoutCancellationException) {
-            throw IllegalStateException("脚本初始化超过 15 秒，请检查网络或使用兼容的 LX 移动版脚本", e)
-        } finally { engine.close() }
     }
 
     private fun parseInitedSources(dataJson: String): Map<String, SourcePlatformCapability> {
@@ -272,101 +297,51 @@ class LxSourceManager(
         return map
     }
 
-    private suspend fun getOrStartEngine(sourceId: String): QuickJsEngine = engineLocks.getOrPut(sourceId) { Mutex() }.withLock {
-        activeEngines[sourceId]?.let { return@withLock it }
-        withTimeout(15000) {
-            val s = sourceDao.getSourceById(sourceId)
-                ?: throw IllegalStateException("未找到音乐源 $sourceId")
-            val engine = QuickJsEngine()
-            val initedDeferred = CompletableDeferred<Boolean>()
-
-            val callback = object : QuickJsHostCallback {
-                override fun onConsoleLog(level: String, message: String) {
-                    Log.d("LX_Script", "[$level] $message")
-                }
-
-                override fun onLxSend(eventName: String, dataJson: String) {
-                    if (eventName == "inited") {
-                        val parsed = parseInitedSources(dataJson)
-                        sourceCapabilities[sourceId] = parsed
-                        initedDeferred.complete(true)
-                    }
-                }
-
-                override fun onLxRequest(reqId: Long, url: String, optionsJson: String) {
-                    dispatchNetworkRequest(engine, reqId, url, optionsJson)
-                }
-            }
-
-            engine.registerHostBridge(callback)
-            try {
-                engine.evaluate(s.scriptContent, "${s.name}.js")
-                engine.executePendingJobs()
-                initedDeferred.await()
-                activeEngines[sourceId] = engine
-                engine
-            } catch (e: Exception) { engine.close(); throw e }
+    private fun stopEngine(sourceId: String) {
+        activeSessions.values.filter { it.sourceId == sourceId }.forEach {
+            it.job.cancel()
+            it.engine.close()
         }
     }
 
-    private fun stopEngine(sourceId: String) {
-        val engine = activeEngines.remove(sourceId)
-        engine?.close()
-        sourceCapabilities.remove(sourceId)
+    override fun close() {
+        scope.cancel()
+        activeSessions.values.forEach { it.job.cancel(); it.engine.close() }
+        activeSessions.clear()
     }
 
-    private fun dispatchNetworkRequest(engine: QuickJsEngine, reqId: Long, urlStr: String, optionsJson: String) {
-        scope.launch {
+    private fun dispatchNetworkRequest(session: Session, reqId: Long, urlStr: String, optionsJson: String) {
+        CoroutineScope(Dispatchers.IO + session.job).launch {
             try {
-                // Security check: Block private and loopback networks
-                val u = URL(urlStr)
-                val inet = InetAddress.getByName(u.host)
-                if (inet.isLoopbackAddress || inet.isSiteLocalAddress || inet.isLinkLocalAddress) {
-                    engine.resolveLxRequest(reqId, true, "禁止访问本地及局域网地址")
-                    return@launch
+                val result = networkSlots.withPermit {
+                    networkPolicy.validate(urlStr)
+                    val opt = JsonParser.parseString(optionsJson).asJsonObject
+                    val method = opt.get("method")?.asString?.uppercase() ?: "GET"
+                    require(method in setOf("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")) { "不支持的请求方式" }
+                    val headers = Headers.Builder()
+                    opt.getAsJsonObject("headers")?.entrySet()?.forEach { (k, v) ->
+                        require(k.lowercase() !in setOf("host", "connection", "content-length", "transfer-encoding")) { "不支持的请求头" }
+                        headers.add(k, v.asString)
+                    }
+                    val req = Request.Builder().url(urlStr).headers(headers.build())
+                    val body = opt.get("body")?.takeUnless { it.isJsonNull }?.asString.orEmpty()
+                    require(body.toByteArray(Charsets.UTF_8).size <= 1024 * 1024) { "请求内容超过 1MB 限制" }
+                    req.method(method, if (method in setOf("POST", "PUT", "PATCH")) body.toRequestBody(
+                        (headers.get("Content-Type") ?: "application/json").toMediaTypeOrNull()) else null)
+                    session.client.withResponse(req.build()) { resp ->
+                        JsonObject().apply {
+                            addProperty("statusCode", resp.code)
+                            addProperty("body", resp.body?.readLimitedText(8 * 1024 * 1024).orEmpty())
+                            add("headers", JsonObject().apply { resp.headers.names().forEach { addProperty(it, resp.header(it)) } })
+                        }.toString()
+                    }
                 }
-
-                val opt = try { JsonParser.parseString(optionsJson).asJsonObject } catch (e: Exception) { JsonObject() }
-                val method = opt.get("method")?.asString?.uppercase() ?: "GET"
-                val headersBuilder = Headers.Builder()
-                opt.getAsJsonObject("headers")?.entrySet()?.forEach { (k, v) ->
-                    headersBuilder.add(k, v.asString)
-                }
-
-                val reqBuilder = Request.Builder()
-                    .url(urlStr)
-                    .headers(headersBuilder.build())
-
-                val bodyStr = opt.get("body")?.asString
-                if (method == "POST" || method == "PUT") {
-                    val mediaType = (opt.get("headers")?.asJsonObject?.get("Content-Type")?.asString ?: "application/json").toMediaTypeOrNull()
-                    reqBuilder.method(method, (bodyStr ?: "").toRequestBody(mediaType))
-                } else {
-                    reqBuilder.method(method, null)
-                }
-
-                val resp = okHttpClient.newCall(reqBuilder.build()).execute()
-                val respBytes = resp.body?.bytes() ?: ByteArray(0)
-                if (respBytes.size > 8 * 1024 * 1024) {
-                    engine.resolveLxRequest(reqId, true, "响应体大小超过 8MB 限制")
-                    return@launch
-                }
-
-                val respText = String(respBytes, Charsets.UTF_8)
-                val respJson = JsonObject()
-                respJson.addProperty("statusCode", resp.code)
-                respJson.addProperty("body", respText)
-
-                val headersObj = JsonObject()
-                for (name in resp.headers.names()) {
-                    headersObj.addProperty(name, resp.headers[name])
-                }
-                respJson.add("headers", headersObj)
-
-                engine.resolveLxRequest(reqId, false, respJson.toString())
-            } catch (e: Exception) {
-                engine.resolveLxRequest(reqId, true, e.message ?: "网络请求失败")
-            }
+                currentCoroutineContext().ensureActive()
+                session.engine.resolveLxRequest(reqId, false, result)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (session.job.isActive) session.engine.resolveLxRequest(reqId, true, e.message ?: "网络请求失败")
+            } finally { session.pending.decrementAndGet() }
         }
     }
 
@@ -397,72 +372,67 @@ class LxSourceManager(
             if (txSel == null) {
                 selectSourceForPlatform("tx", builtinId)
             }
-        } catch (e: Exception) {
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
             Log.e("LxSourceManager", "ensureBuiltinSources error", e)
         }
     }
 
     suspend fun resolveMusicUrl(
-        platform: String,
-        songId: String,
-        quality: String = "128k",
-        title: String? = null,
-        artist: String? = null
-    ): String = withContext(Dispatchers.IO) {
-        val selection = sourceDao.getSelectionForPlatform(platform)
-        val sourceId = selection?.sourceId
+        platform: String, songId: String, quality: String = "128k", title: String? = null,
+        artist: String? = null, network: Network? = null
+    ): String = resolveMusicResource(platform, songId, quality, title, artist, network).url
 
-        if (selection != null && sourceId == null) error("未配置音乐源，请选择支持此平台的音源后重试")
-        val supported = supportedQualities(platform)
-        require(quality in supported) { "当前音源不支持所选音质，请选择：${supported.joinToString()}" }
-        if (sourceId == null || sourceId == "builtin_aggregate") {
-            return@withContext resolveBuiltinMusicUrl(platform, songId, quality, title, artist)
-        }
-
-        // Try custom LX script first
+    data class MusicResource(val url: String, val sourceIdentity: String)
+    suspend fun resolveMusicResource(
+        platform: String, songId: String, quality: String = "128k", title: String? = null,
+        artist: String? = null, network: Network? = null
+    ): MusicResource = withContext(Dispatchers.IO) {
         try {
-            val engine = getOrStartEngine(sourceId)
-            val musicInfo = JsonObject().apply {
-                addProperty("songmid", songId)
-                addProperty("id", songId)
-            }
-            val info = JsonObject().apply {
-                addProperty("type", quality)
-                add("musicInfo", musicInfo)
-            }
-
-            val evalJs = """
-                (function() {
-                    var handler = globalThis.__lx_handlers && globalThis.__lx_handlers.request;
-                    if (!handler) return Promise.reject(new Error("源脚本未注册 request 处理器"));
-                    return handler({
-                        source: "$platform",
-                        action: "musicUrl",
-                        info: ${info}
-                    });
-                })()
-            """.trimIndent()
-
-            val resJson = engine.evaluateAsync(evalJs, "<resolve>")
-            val parsed = JsonParser.parseString(resJson)
-            val url = if (parsed.isJsonPrimitive) {
-                parsed.asString
-            } else if (parsed.isJsonObject && parsed.asJsonObject.has("url")) {
-                parsed.asJsonObject.get("url").asString
-            } else {
-                parsed.toString().trim('"')
-            }
-            if (url.isNotBlank() && (url.startsWith("http://") || url.startsWith("https://"))) {
-                return@withContext url
+            withTimeout(15000) {
+                val selection = sourceDao.getSelectionForPlatform(platform)
+                val sourceId = selection?.sourceId
+                if (selection != null && sourceId == null) error("未配置音乐源，请选择支持此平台的音源后重试")
+                val supported = supportedQualities(platform)
+                require(quality in supported) { "当前音源不支持所选音质，请选择：${supported.joinToString()}" }
+                var sourceIdentity = "builtin_aggregate:v1"
+                val url = if (sourceId == null || sourceId == "builtin_aggregate") {
+                    resolveBuiltinMusicUrl(platform, songId, quality, title, artist, network)
+                } else {
+                    val source = sourceDao.getSourceById(sourceId) ?: error("音源已移除")
+                    sourceIdentity = "$sourceId:${source.scriptHash}"
+                    withEngine(source.scriptContent, sourceId, network) { engine, _ ->
+                        val musicInfo = database.onlineRefDao().getByPlatformId(platform, songId)?.platformMetadataJson
+                            ?.let { runCatching { JsonParser.parseString(it).asJsonObject }.getOrNull() } ?: JsonObject()
+                        musicInfo.addProperty("songmid", songId); musicInfo.addProperty("id", songId)
+                        val request = JsonObject().apply {
+                            addProperty("source", platform); addProperty("action", "musicUrl")
+                            add("info", JsonObject().apply { addProperty("type", quality); add("musicInfo", musicInfo) })
+                        }
+                        val expression = """
+                            (function() {
+                                var handler = globalThis.__lx_handlers && globalThis.__lx_handlers.request;
+                                if (!handler) throw new Error("源脚本未注册 request 处理器");
+                                return handler($request);
+                            })()
+                        """.trimIndent()
+                        val parsed = JsonParser.parseString(engine.evaluateAsync(expression, "<resolve>"))
+                        when {
+                            parsed.isJsonPrimitive -> parsed.asString
+                            parsed.isJsonObject && parsed.asJsonObject.has("url") -> parsed.asJsonObject.get("url").asString
+                            else -> error("音源没有返回有效地址，请切换音源")
+                        }
+                    }
+                }
+                MusicResource(networkPolicy.validate(url).toString(), sourceIdentity)
             }
         } catch (e: TimeoutCancellationException) {
             throw IllegalStateException("音源解析超过 15 秒，请重试或更换音源", e)
         } catch (e: CancellationException) { throw e }
+        catch (e: AlternativeVersionException) { throw e }
         catch (e: Exception) {
-            _sourceHealth.value = _sourceHealth.value + (sourceId to "最近播放解析失败：${e.message}")
             throw IllegalStateException("音乐源解析失败，请重试或切换音源：${e.message}", e)
         }
-        error("音源没有返回有效地址，请切换音源")
     }
 
     private suspend fun resolveBuiltinMusicUrl(
@@ -470,20 +440,25 @@ class LxSourceManager(
         songId: String,
         quality: String,
         title: String?,
-        artist: String?
+        artist: String?,
+        network: Network?
     ): String {
+        val quickClient = audioClient(quickHttpClient, network)
+        val encodedId = URLEncoder.encode(songId, "UTF-8")
         if (platform == "wy") {
             // Priority 1: GDStudio NetEase API (High Quality 320k / 128k) with quick timeout
             try {
                 require(!quality.startsWith("flac")) { "内置音源不提供已验证的无损音质，请选择支持 FLAC 的自定义源" }
                 val br = if (quality == "320k") "320" else "128"
                 val req = Request.Builder()
-                    .url("https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id=$songId&br=$br")
+                    .url("https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id=$encodedId&br=$br")
                     .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
                     .build()
-                val resp = quickHttpClient.newCall(req).execute()
-                if (resp.isSuccessful) {
-                    val body = resp.body?.string() ?: ""
+                val body = quickClient.withResponse(req) { resp ->
+                    check(resp.isSuccessful) { "音源服务返回 ${resp.code}" }
+                    resp.body?.readLimitedText(256 * 1024).orEmpty()
+                }
+                if (body.isNotBlank()) {
                     val json = JsonParser.parseString(body).asJsonObject
                     if (json.has("url")) {
                         val u = json.get("url").asString
@@ -492,31 +467,35 @@ class LxSourceManager(
                         }
                     }
                 }
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
                 Log.w("LxSourceManager", "Builtin wy GDStudio failed/timeout: ${e.message}")
             }
 
             // Priority 2: Paugram API with quick timeout
             try {
                 val req = Request.Builder()
-                    .url("https://api.paugram.com/netease/?id=$songId")
+                    .url("https://api.paugram.com/netease/?id=$encodedId")
                     .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
                     .build()
-                val resp = quickHttpClient.newCall(req).execute()
-                if (resp.isSuccessful) {
-                    val body = resp.body?.string() ?: ""
+                val body = quickClient.withResponse(req) { resp ->
+                    check(resp.isSuccessful) { "音源服务返回 ${resp.code}" }
+                    resp.body?.readLimitedText(256 * 1024).orEmpty()
+                }
+                if (body.isNotBlank()) {
                     val json = JsonParser.parseString(body).asJsonObject
                     if (json.has("link")) {
                         val link = json.get("link").asString
                         if (link.isNotBlank() && link.startsWith("http")) return link
                     }
                 }
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
                 Log.w("LxSourceManager", "Builtin wy Paugram failed/timeout: ${e.message}")
             }
 
             // Priority 3: NetEase standard outer URL (HTTP 302 stream - rock solid with cross-protocol redirect)
-            return "https://music.163.com/song/media/outer/url?id=$songId.mp3"
+            return "https://music.163.com/song/media/outer/url?id=$encodedId.mp3"
         } else if (platform == "tx") {
             // Cross-platform recordings are candidates, never silently substituted.
             var queryTitle = title

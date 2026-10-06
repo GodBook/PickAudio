@@ -11,6 +11,7 @@ class QuickJsEngine : Closeable {
     private val lock = ReentrantLock()
     private var rtPtr: Long = 0
     private var ctxPtr: Long = 0
+    private var callbackFailure: Exception? = null
 
     init {
         rtPtr = QuickJsNativeBridge.nativeCreateRuntime()
@@ -74,8 +75,10 @@ class QuickJsEngine : Closeable {
     fun resolveLxRequest(reqId: Long, isErr: Boolean, dataJson: String?) {
         lock.withLock {
             if (ctxPtr != 0L) {
-                QuickJsNativeBridge.nativeResolveLxRequestCallback(ctxPtr, reqId, isErr, dataJson)
-                QuickJsNativeBridge.nativeExecutePendingJobs(rtPtr)
+                try {
+                    QuickJsNativeBridge.nativeResolveLxRequestCallback(ctxPtr, reqId, isErr, dataJson)
+                    QuickJsNativeBridge.nativeExecutePendingJobs(rtPtr)
+                } catch (e: Exception) { callbackFailure = e }
             }
         }
     }
@@ -89,9 +92,15 @@ class QuickJsEngine : Closeable {
     }
 
     private fun checkOpen() {
+        callbackFailure?.let { throw it }
         if (ctxPtr == 0L || rtPtr == 0L) {
             throw IllegalStateException("QuickJsEngine is closed")
         }
+    }
+
+    fun memoryUsageBytes(): Long = lock.withLock {
+        checkOpen()
+        QuickJsNativeBridge.nativeMemoryUsage(rtPtr)
     }
 
     override fun close() {

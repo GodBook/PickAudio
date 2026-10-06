@@ -15,7 +15,11 @@ data class Track(
     val platformSongId: String? = null,
     val folderName: String = "",
     val sourceType: String = "",
-    val createdAt: Long = 0L
+    val createdAt: Long = 0L,
+    val folderId: String = "",
+    val repairReason: String? = null,
+    val platformMetadataJson: String = "{}",
+    val audioInfo: AudioInfo? = null
 )
 
 enum class PlaybackMode(val displayName: String) {
@@ -60,7 +64,8 @@ data class SearchSongItem(
     val coverUrl: String? = null,
     val availableQualities: List<String> = listOf("128k", "320k", "flac"),
     val isDownloaded: Boolean = false,
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val metadataJson: String = "{}"
 )
 
 enum class DownloadStatus(val label: String) {
@@ -96,5 +101,5 @@ data class PlaybackUiState(
 
 fun SearchSongItem.toTrack() = Track(
     id = "online_${platform}_${songId}", title = title, artist = artist, album = album,
-    durationMs = durationMs, coverUri = coverUrl, platform = platform, platformSongId = songId
+    durationMs = durationMs, coverUri = coverUrl, platform = platform, platformSongId = songId, platformMetadataJson = metadataJson
 )

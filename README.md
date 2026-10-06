@@ -1,8 +1,14 @@
-# 拾音 PickAudio v1.2.0
+# 拾音 PickAudio
 
 Android 本地与在线音乐播放器，使用 Kotlin、Jetpack Compose、Room、Media3 和内嵌 QuickJS。无账号设计，歌单、收藏和设置在设备上保存。
 
-v1.2.0 的体验优化和常用功能入口见 [更新说明](docs/RELEASE-1.2.0.md)。本轮需求、当前进度、验证证据和接手续作入口见 [体验升级记录](docs/UX-UPGRADE.md)。v1.0 的详细设计文档保留为历史设计参考，以当前代码和升级记录为准。
+已发布 v1.2.0 的体验优化和常用功能入口见 [更新说明](docs/RELEASE-1.2.0.md)，对应需求与验收历史见 [体验升级记录](docs/UX-UPGRADE.md)。v1.0 的详细设计文档保留为历史设计参考。
+
+本轮优化需求与审查基线见 [项目优化审查文档](docs/OPTIMIZATION-REVIEW-2026-10-06.md)，包含可靠性、性能、体验与工程维护的优先级、代码依据、方案取舍和验收条件。
+
+优化计划的当前任务、检查点和验证结果见 [优化执行记录](docs/OPTIMIZATION-EXECUTION.md)。
+
+源码现准备发布1.3.0/code 10，O01–O24已实现并完成本地验收：61项JVM测试、Debug/裁剪验证变体各51项设备测试通过，实际Release代码的冷恢复、后台自然切歌和通知入口已复验。原签名正式包为7.78MiB，比v1.2.0减小85.01%，正式签名覆盖升级的数据保留验证已通过。更新说明见[v1.3.0](docs/RELEASE-1.3.0.md)，公开安装入口将在正式发布后同步。环境、隔离设备回归、裁剪包和发布检查见[构建与发布基线](docs/BUILD-AND-RELEASE.md)。
 
 ## 主要功能
 
@@ -35,18 +41,24 @@ v1.2.0 的体验优化和常用功能入口见 [更新说明](docs/RELEASE-1.2.0
 
 v1.2.0 将 Room 数据库从 v1 迁移至 v2，保留已有歌曲、成员、收藏、下载和歌词。歌曲、歌单及脚本更新采用 Upsert，避免替换记录引发关联删除。旧版 v1 备份仍可导入。
 
+当前优化分支继续提供v2→v3→v4迁移，增加独立收藏排序、队列条目和可恢复操作字段，以及真实音频信息和文件身份；备份v3兼容v1/v2格式，恢复中断后可继续。待修复文件从曲库持久状态读取，候选关联须人工核对。
+
 ## 运行和验证
 
 要求 Android 16（API 36）；支持 arm64-v8a 和 x86_64，原生库按 16KB 对齐。开发环境使用 JDK 17、API 36 SDK、NDK 28.2.13676358 和 CMake 3.22.1。
 
 ```powershell
 $env:JAVA_HOME = 'D:/dev/jdk-17'
-./gradlew.bat :app:testDebugUnitTest :app:connectedDebugAndroidTest :app:lintDebug :app:assembleRelease
+./gradlew.bat :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest
+./gradlew.bat :app:assembleRelease
+./gradlew.bat :app:lintDebug
 ```
 
-连接 Android 16 设备或启动 API 36 模拟器后可执行 Android 流程测试。测试覆盖搜索竞态／分页、歌曲版本、音频格式／续传策略、Room 迁移、扫描设置、歌词、备份、下载与界面流程；本次实际结果见升级记录。Windows 中文路径下 JVM 测试使用临时 ASCII 运行路径，不移动项目。
+Android 流程测试只在没有个人数据的专用 API 36 模拟器运行；部分测试会清空应用队列。设备命令见构建与发布基线，当前本地设备明确指定emulator-5560。测试覆盖搜索竞态／分页、歌曲版本、音频格式／续传策略、Room 迁移、扫描设置、歌词、备份、下载与界面流程；本轮实际结果见优化执行记录。Windows 中文路径下 JVM 测试使用临时 ASCII 运行路径，不移动项目。
 
 Debug APK：`app/build/outputs/apk/debug/app-debug.apk`。Release 构建默认生成未签名 APK，使用原项目签名后才能覆盖安装旧正式版；签名密码不写入项目文件。
+
+Release已开启R8与资源裁剪。构建版本统一读取version.properties；依赖锁定和SHA-256校验随本轮验收生成。第三方来源与完整许可证见[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，构建同时将准确依赖清单和原始notice放入APK，设置页可离线查看。
 
 正式安装包：[`PickAudio-v1.2.0-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.2.0/PickAudio-v1.2.0-release.apk)，沿用原项目签名，大小约 51.9 MiB，可覆盖旧正式版。完整更新说明和安装包校验信息见 [v1.2.0 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.2.0)；构建、数据保留和小屏／大字号验收结果见 [体验升级记录](docs/UX-UPGRADE.md)。
 

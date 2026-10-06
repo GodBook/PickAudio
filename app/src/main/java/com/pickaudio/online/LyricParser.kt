@@ -7,12 +7,15 @@ data class LyricLine(
 )
 
 object LyricParser {
-    private val timeRegex = Regex("""\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?]""")
+    private val timeRegex = Regex("""\[(\d{1,6}):(\d{1,2})(?:\.(\d{1,3}))?]""")
+    private val offsetRegex = Regex("""\[offset:([+-]?\d{1,9})]""", RegexOption.IGNORE_CASE)
 
     fun parse(lrcContent: String, transContent: String? = null): List<LyricLine> {
         if (lrcContent.isBlank()) return emptyList()
 
         val lines = mutableListOf<LyricLine>()
+        // LRC positive offset advances timestamps; app calibration remains a separate delay.
+        val embeddedOffset = offsetRegex.findAll(lrcContent).lastOrNull()?.groupValues?.get(1)?.toLongOrNull() ?: 0L
         for (rawLine in lrcContent.lines()) {
             val trimmed = rawLine.trim()
             if (trimmed.isEmpty()) continue
@@ -29,11 +32,12 @@ object LyricParser {
             for (match in matches) {
                 val min = match.groupValues[1].toLongOrNull() ?: 0L
                 val sec = match.groupValues[2].toLongOrNull() ?: 0L
+                if (sec !in 0..59) continue
                 val fracStr = match.groupValues[3]
                 val millis = if (fracStr.isNotEmpty()) {
-                    if (fracStr.length == 2) fracStr.toLong() * 10 else fracStr.toLong()
+                    fracStr.padEnd(3, '0').toLong()
                 } else 0L
-                val totalMs = min * 60000L + sec * 1000L + millis
+                val totalMs = (min * 60000L + sec * 1000L + millis - embeddedOffset).coerceAtLeast(0)
                 lines.add(LyricLine(timeMs = totalMs, text = text))
             }
         }
@@ -43,10 +47,13 @@ object LyricParser {
         // Merge translation if available
         if (!transContent.isNullOrBlank()) {
             val transLines = parse(transContent, null)
+            var index = 0
             for (t in transLines) {
                 if (t.text.isBlank()) continue
-                // Find matching line within 200ms
-                val match = sorted.find { kotlin.math.abs(it.timeMs - t.timeMs) < 200 }
+                while (index + 1 < sorted.size && sorted[index + 1].timeMs <= t.timeMs) index++
+                val match = listOfNotNull(sorted.getOrNull(index), sorted.getOrNull(index + 1))
+                    .filter { kotlin.math.abs(it.timeMs - t.timeMs) < 200 }
+                    .minByOrNull { kotlin.math.abs(it.timeMs - t.timeMs) }
                 if (match != null && match.translation == null) {
                     match.translation = t.text
                 }

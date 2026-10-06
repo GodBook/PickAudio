@@ -1,5 +1,8 @@
 package com.pickaudio.ui.screens
 
+import androidx.compose.ui.res.stringResource
+
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.*
@@ -25,12 +28,14 @@ import kotlinx.coroutines.launch
 fun DownloadScreen(downloadCoordinator: DownloadCoordinator, onBack: () -> Unit, modifier: Modifier = Modifier, onOpenSource: () -> Unit = {}) {
     val context = LocalContext.current
     val app = context.applicationContext as PickAudioApplication
-    val tasks by downloadCoordinator.getAllTasks().collectAsState(initial = emptyList())
-    val wifiOnly by app.userPreferences.wifiOnlyDownload.collectAsState(initial = true)
-    val candidates by downloadCoordinator.versionCandidates.collectAsState()
+    val tasks by downloadCoordinator.getAllTasks().collectAsStateWithLifecycle(initialValue = emptyList())
+    val wifiOnly by app.userPreferences.wifiOnlyDownload.collectAsStateWithLifecycle(initialValue = true)
+    val candidates by downloadCoordinator.versionCandidates.collectAsStateWithLifecycle()
     var tab by remember { mutableIntStateOf(0) }
     var selecting by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    androidx.activity.compose.BackHandler(enabled = selecting && !com.pickaudio.LocalPlayerOverlayVisible.current) { selecting = false; selectedIds = emptySet() }
+    LaunchedEffect(tab) { if (tab == 1) downloadCoordinator.refreshCompletedFiles() }
     var versionTask by remember { mutableStateOf<DownloadTaskEntity?>(null) }
     var qualityTrack by remember { mutableStateOf<Track?>(null) }
     var cancelIds by remember { mutableStateOf<List<String>?>(null) }
@@ -47,7 +52,7 @@ fun DownloadScreen(downloadCoordinator: DownloadCoordinator, onBack: () -> Unit,
     fun track(task: DownloadTaskEntity) = Track(task.trackId, task.title, task.artist, task.album, task.durationMs,
         task.coverUri, localUri = task.targetUri, platform = task.platform, platformSongId = task.platformSongId, sourceType = if (task.status == "COMPLETED") "DOWNLOADED" else "")
     Scaffold(topBar = {
-        TopAppBar(title = { Text("下载管理") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
+        TopAppBar(title = { Text(stringResource(com.pickaudio.R.string.ui_libraryscreen_019)) }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(com.pickaudio.R.string.action_back)) } },
             actions = { TextButton(onClick = { selecting = !selecting; selectedIds = emptySet() }) { Text(if (selecting) "完成" else "多选") } })
     }, snackbarHost = { SnackbarHost(snack) }, modifier = modifier.fillMaxSize()) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
@@ -60,10 +65,10 @@ fun DownloadScreen(downloadCoordinator: DownloadCoordinator, onBack: () -> Unit,
             }
             if (selecting) FlowRow(Modifier.padding(horizontal = 12.dp)) {
                 TextButton(onClick = { selectedIds = shown.map { it.id }.toSet() }) { Text("全选 (${selectedIds.size})") }
-                if (tab == 0) TextButton(onClick = { downloadCoordinator.pauseAll(selected.map { it.id }) }, enabled = selected.isNotEmpty()) { Text("暂停") }
-                if (tab == 2) TextButton(onClick = { downloadCoordinator.resumeAll(selected.map { it.id }); message("已加入等待队列") }, enabled = selected.isNotEmpty()) { Text("重试/继续") }
-                if (tab != 1) TextButton(onClick = { cancelIds = selected.map { it.id } }, enabled = selected.isNotEmpty()) { Text("取消任务") }
-                else TextButton(onClick = { selected.forEach { app.playbackCoordinator.addToQueue(track(it)) }; message("已加入播放队列") }, enabled = selected.isNotEmpty()) { Text("加入队列") }
+                if (tab == 0) TextButton(onClick = { downloadCoordinator.pauseAll(selected.map { it.id }) }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.action_pause)) }
+                if (tab == 2) TextButton(onClick = { downloadCoordinator.resumeAll(selected.map { it.id }); message("已加入等待队列") }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.ui_downloadscreen_001)) }
+                if (tab != 1) TextButton(onClick = { cancelIds = selected.map { it.id } }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.ui_downloadscreen_002)) }
+                else TextButton(onClick = { selected.forEach { app.playbackCoordinator.addToQueue(track(it)) }; message("已加入播放队列") }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.action_add_queue)) }
             }
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (shown.isEmpty()) item { Text(when(tab) { 0 -> "没有待下载任务"; 1 -> "下载完成的音乐会显示在这里"; else -> "暂时没有需要处理的下载" }, modifier = Modifier.padding(16.dp)) }
@@ -90,24 +95,28 @@ fun DownloadScreen(downloadCoordinator: DownloadCoordinator, onBack: () -> Unit,
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 when (task.status) {
                                     "COMPLETED" -> {
-                                        FilledTonalButton(onClick = { app.playbackCoordinator.addOrPlayTrack(track(task)) }) { Text("播放") }
+                                        FilledTonalButton(onClick = { app.playbackCoordinator.addOrPlayTrack(track(task)) }) { Text(stringResource(com.pickaudio.R.string.action_play)) }
                                         TextButton(onClick = {
                                             try {
                                                 val uri = Uri.parse(task.targetUri ?: error("文件地址缺失"))
                                                 val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, context.contentResolver.getType(uri) ?: "audio/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                                 context.startActivity(Intent.createChooser(intent, "打开音乐文件"))
                                             } catch (e: Exception) { message("无法打开文件，请检查文件是否仍在 Music/PickAudio") }
-                                        }) { Text("查看文件") }
+                                        }) { Text(stringResource(com.pickaudio.R.string.ui_downloadscreen_003)) }
                                     }
                                     "PAUSED", "FAILED" -> {
                                         FilledTonalButton(onClick = { downloadCoordinator.resumeTask(task.id) }) { Text(if (task.status == "FAILED") "重试" else "继续") }
-                                        TextButton(onClick = { qualityTrack = track(task) }) { Text("选择其他音质") }
-                                        TextButton(onClick = onOpenSource) { Text("更换音乐源") }
+                                        TextButton(onClick = { qualityTrack = track(task) }) { Text(stringResource(com.pickaudio.R.string.ui_downloadscreen_004)) }
+                                        TextButton(onClick = onOpenSource) { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_014)) }
                                     }
-                                    else -> TextButton(onClick = { downloadCoordinator.pauseTask(task.id) }) { Text("暂停") }
+                                    "PENDING" -> {
+                                        if (task.errorMessage != null) FilledTonalButton(onClick = { downloadCoordinator.resumeTask(task.id) }) { Text(stringResource(com.pickaudio.R.string.ui_downloadscreen_005)) }
+                                        TextButton(onClick = { downloadCoordinator.pauseTask(task.id) }) { Text(stringResource(com.pickaudio.R.string.action_pause)) }
+                                    }
+                                    else -> TextButton(onClick = { downloadCoordinator.pauseTask(task.id) }) { Text(stringResource(com.pickaudio.R.string.action_pause)) }
                                 }
-                                if (!candidates[task.id].isNullOrEmpty()) TextButton(onClick = { versionTask = task }) { Text("确认其他版本") }
-                                if (task.status != "COMPLETED") TextButton(onClick = { cancelIds = listOf(task.id) }) { Text("取消任务") }
+                                if (!candidates[task.id].isNullOrEmpty()) TextButton(onClick = { versionTask = task }) { Text(stringResource(com.pickaudio.R.string.ui_downloadscreen_006)) }
+                                if (task.status != "COMPLETED") TextButton(onClick = { cancelIds = listOf(task.id) }) { Text(stringResource(com.pickaudio.R.string.ui_downloadscreen_002)) }
                             }
                         }
                     }
@@ -116,9 +125,9 @@ fun DownloadScreen(downloadCoordinator: DownloadCoordinator, onBack: () -> Unit,
         }
     }
     cancelIds?.let { ids ->
-        AlertDialog(onDismissRequest = { cancelIds = null }, title = { Text("取消下载") }, text = { Text("取消这 ${ids.size} 个任务并移除未完成文件。") },
-            confirmButton = { TextButton(onClick = { downloadCoordinator.cancelAll(ids); cancelIds = null; selectedIds = emptySet() }) { Text("取消任务") } },
-            dismissButton = { TextButton(onClick = { cancelIds = null }) { Text("保留任务") } })
+        AlertDialog(onDismissRequest = { cancelIds = null }, title = { Text(stringResource(com.pickaudio.R.string.ui_downloadscreen_007)) }, text = { Text("取消这 ${ids.size} 个任务并移除未完成文件。") },
+            confirmButton = { TextButton(onClick = { downloadCoordinator.cancelAll(ids); cancelIds = null; selectedIds = emptySet() }) { Text(stringResource(com.pickaudio.R.string.ui_downloadscreen_002)) } },
+            dismissButton = { TextButton(onClick = { cancelIds = null }) { Text(stringResource(com.pickaudio.R.string.ui_downloadscreen_008)) } })
     }
     qualityTrack?.let { DownloadQualityDialog(listOf(it), downloadCoordinator, app.sourceManager, app.userPreferences, { qualityTrack = null }, onOpenSource) }
     versionTask?.let { task ->

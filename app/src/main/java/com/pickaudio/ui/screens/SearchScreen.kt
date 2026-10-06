@@ -1,5 +1,8 @@
 package com.pickaudio.ui.screens
 
+import androidx.compose.ui.res.stringResource
+
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -34,17 +37,24 @@ fun SearchScreen(
 ) {
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
-    val history by userPreferences.searchHistory.collectAsState(initial = emptyList())
-    val current by playbackCoordinator.currentTrack.collectAsState()
-    val playing by playbackCoordinator.isPlaying.collectAsState()
+    val history by userPreferences.searchHistory.collectAsStateWithLifecycle(initialValue = emptyList())
+    val current by playbackCoordinator.currentTrack.collectAsStateWithLifecycle()
+    val playing by playbackCoordinator.isPlaying.collectAsStateWithLifecycle()
     val snack = remember { SnackbarHostState() }
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selecting by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(enabled = selecting && !com.pickaudio.LocalPlayerOverlayVisible.current) { selecting = false; selectedIds = emptySet() }
     var playlistTracks by remember { mutableStateOf<List<Track>?>(null) }
     var downloadTracks by remember { mutableStateOf<List<Track>?>(null) }
-    val favorites by playlistRepository.getFavoriteTracks().collectAsState(initial = emptyList())
-    val favoriteIds = favorites.map { it.id }.toSet()
-    val allTracks = searchStateManager.searchResults.map { it.toTrack().copy(isFavorite = it.toTrack().id in favoriteIds) }
+    val favorites by playlistRepository.favoriteIds.collectAsStateWithLifecycle(initialValue = emptyList())
+    val onlineIds by playlistRepository.onlineIds.collectAsStateWithLifecycle(initialValue = emptyMap())
+    val favoriteIds = remember(favorites) { favorites.toSet() }
+    fun canonical(item: SearchSongItem): Track {
+        val track = item.toTrack()
+        val id = onlineIds[item.platform to item.songId] ?: track.id
+        return track.copy(id = id, isFavorite = id in favoriteIds)
+    }
+    val allTracks = searchStateManager.searchResults.map(::canonical)
     val selected = allTracks.filter { it.id in selectedIds }
     fun select(id: String) { selecting = true; selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id }
     fun search(keyword: String) {
@@ -57,18 +67,18 @@ fun SearchScreen(
     fun message(text: String) { scope.launch { snack.showSnackbar(text) } }
 
     Scaffold(topBar = {
-        TopAppBar(title = { Text("在线搜索", fontWeight = FontWeight.SemiBold) }, actions = {
+        TopAppBar(title = { Text(stringResource(com.pickaudio.R.string.ui_searchscreen_001), fontWeight = FontWeight.SemiBold) }, actions = {
             TextButton(onClick = { selecting = !selecting; selectedIds = emptySet() }) { Text(if (selecting) "完成" else "多选") }
-            IconButton(onClick = onNavigateToDownload) { Icon(Icons.Default.Download, contentDescription = "下载管理") }
-            IconButton(onClick = onNavigateToSourceManager) { Icon(Icons.Default.Tune, contentDescription = "配置音乐源") }
+            IconButton(onClick = onNavigateToDownload) { Icon(Icons.Default.Download, contentDescription = stringResource(com.pickaudio.R.string.ui_libraryscreen_019)) }
+            IconButton(onClick = onNavigateToSourceManager) { Icon(Icons.Default.Tune, contentDescription = stringResource(com.pickaudio.R.string.ui_searchscreen_009)) }
         })
     }, snackbarHost = { SnackbarHost(snack) }, modifier = modifier.fillMaxSize()) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             OutlinedTextField(
                 value = searchStateManager.query, onValueChange = { searchStateManager.query = it },
-                placeholder = { Text("搜索歌曲、歌手或专辑", maxLines = 1, overflow = TextOverflow.Ellipsis) }, singleLine = true,
+                placeholder = { Text(stringResource(com.pickaudio.R.string.ui_searchscreen_002), maxLines = 1, overflow = TextOverflow.Ellipsis) }, singleLine = true,
                 leadingIcon = { Icon(Icons.Default.Search, null) },
-                trailingIcon = { if (searchStateManager.query.isNotEmpty()) IconButton(onClick = { searchStateManager.clear() }) { Icon(Icons.Default.Close, "清除搜索") } },
+                trailingIcon = { if (searchStateManager.query.isNotEmpty()) IconButton(onClick = { searchStateManager.clear() }) { Icon(Icons.Default.Close, stringResource(com.pickaudio.R.string.ui_libraryscreen_020)) } },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { search(searchStateManager.query) }),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
@@ -76,44 +86,45 @@ fun SearchScreen(
             FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Platform.entries.forEach { platform ->
                     FilterChip(selected = searchStateManager.selectedPlatform == platform, onClick = {
-                        searchStateManager.selectedPlatform = platform
-                        if (searchStateManager.query.isNotBlank()) search(searchStateManager.query)
+                        searchStateManager.selectPlatform(platform)
+                        if (searchStateManager.query.isNotBlank() && searchStateManager.query.trim() != searchStateManager.submittedQuery)
+                            search(searchStateManager.query)
                     }, label = { Text(platform.displayName) })
                 }
-                TextButton(onClick = { search(searchStateManager.query) }, enabled = searchStateManager.query.isNotBlank()) { Text("搜索") }
+                TextButton(onClick = { search(searchStateManager.query) }, enabled = searchStateManager.query.isNotBlank()) { Text(stringResource(com.pickaudio.R.string.ui_mainactivity_003)) }
             }
             if (selecting) {
                 FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(onClick = { selectedIds = allTracks.map { it.id }.toSet() }) { Text("全选 (${selectedIds.size})") }
-                    TextButton(onClick = { playlistTracks = selected }, enabled = selected.isNotEmpty()) { Text("加入歌单") }
-                    TextButton(onClick = { downloadTracks = selected }, enabled = selected.isNotEmpty()) { Text("下载") }
-                    TextButton(onClick = { selected.forEach { playbackCoordinator.addToQueue(it) }; message("已加入队尾") }, enabled = selected.isNotEmpty()) { Text("加入队列") }
+                    TextButton(onClick = { playlistTracks = selected }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.action_add_playlist)) }
+                    TextButton(onClick = { downloadTracks = selected }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.action_download)) }
+                    TextButton(onClick = { selected.forEach { playbackCoordinator.addToQueue(it) }; message("已加入队尾") }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.action_add_queue)) }
                 }
             }
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 16.dp)) {
                 if (searchStateManager.submittedQuery.isEmpty()) {
                     item {
                         Column(Modifier.padding(20.dp)) {
-                            Text("搜索历史", style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(com.pickaudio.R.string.ui_searchscreen_003), style = MaterialTheme.typography.titleMedium)
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 history.forEach { value ->
                                     InputChip(false, onClick = { search(value) }, label = { Text(value) }, trailingIcon = {
-                                        IconButton(onClick = { scope.launch { userPreferences.removeSearchHistory(value) } }, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.Close, "删除历史") }
+                                        IconButton(onClick = { scope.launch { userPreferences.removeSearchHistory(value) } }, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.Close, stringResource(com.pickaudio.R.string.ui_searchscreen_010)) }
                                     })
                                 }
                             }
-                            if (history.isEmpty()) Text("输入歌名后搜索，两个平台会分别显示结果。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            else TextButton(onClick = { scope.launch { userPreferences.clearSearchHistory() } }) { Text("清空历史") }
+                            if (history.isEmpty()) Text(stringResource(com.pickaudio.R.string.ui_searchscreen_004), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            else TextButton(onClick = { scope.launch { userPreferences.clearSearchHistory() } }) { Text(stringResource(com.pickaudio.R.string.ui_searchscreen_005)) }
                         }
                     }
                 }
-                searchStateManager.platformStates.forEach { (platform, state) ->
+                searchStateManager.platformStates.filterKeys { searchStateManager.selectedPlatform == Platform.ALL || it == searchStateManager.selectedPlatform.id }.forEach { (platform, state) ->
                     item(key = "header_${platform}") {
                         Text("${Platform.fromId(platform).displayName} · ${state.items.size} 首", style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(16.dp))
                     }
-                    items(state.items, key = { "${it.platform}_${it.songId}" }) { item ->
-                        val track = item.toTrack().copy(isFavorite = item.toTrack().id in favoriteIds)
+                    items(if (searchStateManager.selectedPlatform == Platform.ALL) state.items.take(5) else state.items, key = { "${it.platform}_${it.songId}" }) { item ->
+                        val track = canonical(item)
                         MusicTrackRow(track, isCurrent = current?.id == track.id, isPlaying = playing,
                             selecting = selecting, selected = track.id in selectedIds, onSelect = { select(track.id) },
                             onClick = { playbackCoordinator.addOrPlayTrack(track); onOpenPlayer() },
@@ -130,19 +141,23 @@ fun SearchScreen(
                     }
                     item(key = "status_${platform}") {
                         Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                            if (searchStateManager.selectedPlatform == Platform.ALL && state.items.size > 5)
+                                TextButton(onClick = { searchStateManager.selectPlatform(Platform.fromId(platform)) }) {
+                                    Text("查看${Platform.fromId(platform).displayName}全部 ${state.items.size} 首")
+                                }
                             if (state.loading) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("正在加载${Platform.fromId(platform).displayName}…") }
                             else if (state.error != null) {
                                 Text(state.error, color = MaterialTheme.colorScheme.error)
-                                TextButton(onClick = { searchStateManager.loadMore(platform) }) { Text("重试此平台") }
-                            } else if (state.items.isEmpty()) Text("没有找到匹配歌曲，可尝试更短的歌名或歌手名。")
+                                TextButton(onClick = { searchStateManager.loadMore(platform) }) { Text(stringResource(com.pickaudio.R.string.ui_searchscreen_006)) }
+                            } else if (state.items.isEmpty()) Text(stringResource(com.pickaudio.R.string.ui_searchscreen_007))
                             else if (state.hasMore) OutlinedButton(onClick = { searchStateManager.loadMore(platform) }) { Text("加载更多${Platform.fromId(platform).displayName}结果") }
-                            else Text("已显示全部结果", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            else Text(stringResource(com.pickaudio.R.string.ui_searchscreen_008), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
             }
         }
     }
-    playlistTracks?.let { PlaylistPickerDialog(it, playlistRepository, { playlistTracks = null }, { message("已加入「$it」") }) }
-    downloadTracks?.let { DownloadQualityDialog(it, downloadCoordinator, sourceManager, userPreferences, { downloadTracks = null }, onNavigateToSourceManager, { message("已加入下载，进度可在下载管理查看") }) }
+    playlistTracks?.let { PlaylistPickerDialog(it, playlistRepository, { playlistTracks = null }, ::message) }
+    downloadTracks?.let { DownloadQualityDialog(it, downloadCoordinator, sourceManager, userPreferences, { downloadTracks = null }, onNavigateToSourceManager, { message(it.summary) }) }
 }

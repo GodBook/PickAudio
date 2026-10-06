@@ -5,6 +5,13 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class LyricParserTest {
+    @Test fun longMinutesSingleFractionMultipleTagsAndEmbeddedOffsetAreParsed() {
+        val parsed = LyricParser.parse("[offset:+250]\n[1:02.5][123:04.125]同一句\n[1:99.00]无效时间")
+        assertEquals(2, parsed.size)
+        assertEquals(62250L, parsed[0].timeMs)
+        assertEquals(7383875L, parsed[1].timeMs)
+        assertEquals("同一句", parsed[1].text)
+    }
 
     @Test
     fun testParseStandardLrc() {

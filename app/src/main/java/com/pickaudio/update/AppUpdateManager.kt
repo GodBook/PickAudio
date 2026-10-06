@@ -8,9 +8,7 @@ import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,7 +16,10 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
-import java.io.FileOutputStream
+import com.pickaudio.network.withResponse
+import com.pickaudio.network.readLimitedText
+import android.content.pm.PackageManager
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 data class UpdateInfo(
@@ -28,7 +29,8 @@ data class UpdateInfo(
     val downloadUrl: String,
     val releasePageUrl: String,
     val apkSize: Long = 0L,
-    val publishTime: String = ""
+    val publishTime: String = "",
+    val sha256: String? = null
 )
 
 sealed interface UpdateStatus {
@@ -53,7 +55,8 @@ private data class GitHubRelease(
 private data class GitHubAsset(
     @SerializedName("name") val name: String?,
     @SerializedName("size") val size: Long?,
-    @SerializedName("browser_download_url") val downloadUrl: String?
+    @SerializedName("browser_download_url") val downloadUrl: String?,
+    @SerializedName("digest") val digest: String?
 )
 
 private data class VersionManifest(
@@ -63,7 +66,8 @@ private data class VersionManifest(
     @SerializedName("downloadUrl") val downloadUrl: String?,
     @SerializedName("releasePageUrl") val releasePageUrl: String?,
     @SerializedName("apkSize") val apkSize: Long?,
-    @SerializedName("publishTime") val publishTime: String?
+    @SerializedName("publishTime") val publishTime: String?,
+    @SerializedName("sha256") val sha256: String?
 )
 
 class AppUpdateManager(
@@ -71,13 +75,21 @@ class AppUpdateManager(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.MINUTES)
         .followRedirects(true)
-        .build()
+        .build(),
+    private val packageValidator: ((File, UpdateInfo) -> Unit)? = null,
+    private val urlValidator: (String) -> Unit = ::requireOfficialUpdateUrl
 ) {
     private val _status = MutableStateFlow<UpdateStatus>(UpdateStatus.Idle)
     val status: StateFlow<UpdateStatus> = _status.asStateFlow()
 
     private var downloadJob: Job? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val operationLock = Any()
+    private var generation = 0L
+    private var downloadedInfo: UpdateInfo? = null
+    private val updatesDirectory get() = File(context.cacheDir, "updates")
     private val gson = Gson()
 
     val currentVersionName: String
@@ -102,9 +114,15 @@ class AppUpdateManager(
         }
 
     suspend fun checkForUpdates(): UpdateStatus = withContext(Dispatchers.IO) {
-        _status.value = UpdateStatus.Checking
+        val token = synchronized(operationLock) {
+            if (downloadJob?.isActive == true) return@withContext _status.value
+            ++generation
+        }
+        publishStatus(token, UpdateStatus.Checking)
 
-        val info = fetchFromGitHubReleases() ?: fetchFromVersionJson()
+        val info = withTimeoutOrNull(15_000) {
+            fetchFromGitHubReleases() ?: fetchFromVersionJson()
+        }
 
         val result = if (info == null) {
             UpdateStatus.Error("无法获取版本信息，请检查网络连接")
@@ -114,11 +132,11 @@ class AppUpdateManager(
             UpdateStatus.UpToDate
         }
 
-        _status.value = result
+        publishStatus(token, result)
         result
     }
 
-    private fun fetchFromGitHubReleases(): UpdateInfo? {
+    private suspend fun fetchFromGitHubReleases(): UpdateInfo? {
         val url = "https://api.github.com/repos/GodBook/PickAudio/releases/latest"
         try {
             val request = Request.Builder()
@@ -127,12 +145,12 @@ class AppUpdateManager(
                 .header("User-Agent", "PickAudio-App")
                 .build()
 
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return null
-                val body = response.body?.string() ?: return null
-                val release = gson.fromJson(body, GitHubRelease::class.java) ?: return null
+            return client.withResponse(request) { response ->
+                if (!response.isSuccessful) return@withResponse null
+                val body = response.body?.readLimitedText(2 * 1024 * 1024) ?: return@withResponse null
+                val release = gson.fromJson(body, GitHubRelease::class.java) ?: return@withResponse null
 
-                val tagName = release.tagName?.trim() ?: return null
+                val tagName = release.tagName?.trim() ?: return@withResponse null
                 val vName = tagName.removePrefix("v").removePrefix("V")
                 val apkAsset = release.assets?.firstOrNull { it.name?.endsWith(".apk", ignoreCase = true) == true }
 
@@ -142,7 +160,7 @@ class AppUpdateManager(
                 val apkSize = apkAsset?.size ?: 0L
                 val changelog = release.body?.takeIf { it.isNotBlank() } ?: (release.name ?: "版本更新")
 
-                return UpdateInfo(
+                UpdateInfo(
                     // GitHub tags contain version names, not Android build codes.
                     versionCode = 0,
                     versionName = vName,
@@ -150,18 +168,20 @@ class AppUpdateManager(
                     downloadUrl = downloadUrl,
                     releasePageUrl = release.htmlUrl ?: "https://github.com/GodBook/PickAudio/releases",
                     apkSize = apkSize,
-                    publishTime = release.publishedAt?.take(10) ?: ""
+                    publishTime = release.publishedAt?.take(10) ?: "",
+                    sha256 = apkAsset?.digest?.takeIf { it.startsWith("sha256:") }?.removePrefix("sha256:")
                 )
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             return null
         }
     }
 
-    private fun fetchFromVersionJson(): UpdateInfo? {
+    private suspend fun fetchFromVersionJson(): UpdateInfo? {
         val candidates = listOf(
             "https://raw.githubusercontent.com/GodBook/PickAudio/main/version.json",
-            "https://raw.gitmirror.com/GodBook/PickAudio/main/version.json",
             "https://cdn.jsdelivr.net/gh/GodBook/PickAudio@main/version.json"
         )
 
@@ -172,23 +192,27 @@ class AppUpdateManager(
                     .header("User-Agent", "PickAudio-App")
                     .build()
 
-                client.newCall(request).execute().use { response ->
+                val info = client.withResponse(request) { response ->
                     if (response.isSuccessful) {
-                        val body = response.body?.string() ?: return@use
-                        val manifest = gson.fromJson(body, VersionManifest::class.java) ?: return@use
-                        val vName = manifest.versionName ?: return@use
+                        val body = response.body?.readLimitedText(2 * 1024 * 1024) ?: return@withResponse null
+                        val manifest = gson.fromJson(body, VersionManifest::class.java) ?: return@withResponse null
+                        val vName = manifest.versionName ?: return@withResponse null
 
-                        return UpdateInfo(
+                        UpdateInfo(
                             versionCode = manifest.versionCode ?: 0,
                             versionName = vName,
                             changelog = manifest.changelog ?: "版本更新",
                             downloadUrl = manifest.downloadUrl ?: "",
                             releasePageUrl = manifest.releasePageUrl ?: "https://github.com/GodBook/PickAudio/releases",
                             apkSize = manifest.apkSize ?: 0L,
-                            publishTime = manifest.publishTime ?: ""
+                            publishTime = manifest.publishTime ?: "",
+                            sha256 = manifest.sha256
                         )
-                    }
+                    } else null
                 }
+                if (info != null) return info
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
                 // Continue to next candidate mirror
             }
@@ -199,89 +223,93 @@ class AppUpdateManager(
     private fun isNewer(remoteVersionName: String, remoteVersionCode: Int): Boolean =
         isNewerAppVersion(currentVersionName, currentVersionCode, remoteVersionName, remoteVersionCode)
 
-    suspend fun startDownload(info: UpdateInfo) = withContext(Dispatchers.IO) {
-        if (info.downloadUrl.isBlank()) {
-            _status.value = UpdateStatus.Error("下载地址无效")
-            return@withContext
-        }
-
-        val updatesDir = File(context.cacheDir, "updates")
-        if (!updatesDir.exists()) updatesDir.mkdirs()
-
-        val apkFile = File(updatesDir, "PickAudio-v${info.versionName}.apk")
-        if (apkFile.exists()) {
-            apkFile.delete()
-        }
-
-        _status.value = UpdateStatus.Downloading(0f, 0L, info.apkSize)
-
-        try {
-            val request = Request.Builder()
-                .url(info.downloadUrl)
-                .header("User-Agent", "PickAudio-App")
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    _status.value = UpdateStatus.Error("下载失败: HTTP ${response.code}")
-                    return@withContext
-                }
-
-                val body = response.body ?: run {
-                    _status.value = UpdateStatus.Error("下载响应为空")
-                    return@withContext
-                }
-
-                val totalLength = if (body.contentLength() > 0) body.contentLength() else info.apkSize
-                var downloadedBytes = 0L
-
-                val inputStream = body.byteStream()
-                val outputStream = FileOutputStream(apkFile)
-
-                val buffer = ByteArray(8 * 1024)
-                var bytesRead: Int
-
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    outputStream.write(buffer, 0, bytesRead)
-                    downloadedBytes += bytesRead
-
-                    val progress = if (totalLength > 0) {
-                        (downloadedBytes.toFloat() / totalLength).coerceIn(0f, 1f)
-                    } else {
-                        0.5f
+    suspend fun startDownload(info: UpdateInfo) {
+        val job = synchronized(operationLock) {
+            val token = ++generation
+            downloadJob?.cancel()
+            val task = scope.launch(start = CoroutineStart.LAZY) {
+                publishStatus(token, UpdateStatus.Downloading(0f, 0L, info.apkSize))
+                try {
+                    val downloader = UpdatePackageDownloader(client, updatesDirectory,
+                        packageValidator ?: { file, expected -> validateApk(file, expected) }, urlValidator)
+                    val file = downloader.download(info) { bytes, total ->
+                        val progress = if (total > 0) (bytes.toFloat() / total).coerceIn(0f, 1f) else 0f
+                        publishStatus(token, UpdateStatus.Downloading(progress, bytes, total))
                     }
-                    _status.value = UpdateStatus.Downloading(progress, downloadedBytes, totalLength)
+                    synchronized(operationLock) {
+                        if (token == generation) {
+                            downloadedInfo = info
+                            _status.value = UpdateStatus.Downloaded(info, file)
+                        } else file.delete()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    publishStatus(token, UpdateStatus.Error(e.message ?: "下载失败，请重试"))
+                } finally {
+                    synchronized(operationLock) { if (token == generation) downloadJob = null }
                 }
-
-                outputStream.flush()
-                outputStream.close()
-                inputStream.close()
-
-                _status.value = UpdateStatus.Downloaded(info, apkFile)
             }
-        } catch (e: CancellationException) {
-            if (apkFile.exists()) apkFile.delete()
-            _status.value = UpdateStatus.Idle
-            throw e
-        } catch (e: Exception) {
-            if (apkFile.exists()) apkFile.delete()
-            _status.value = UpdateStatus.Error("下载异常: ${e.localizedMessage ?: e.message}")
+            downloadJob = task
+            task.start()
+            task
         }
+        // The manager owns the download; leaving Settings only cancels this wait.
+        job.join()
     }
 
-    fun cancelDownload() {
+    private fun publishStatus(token: Long, value: UpdateStatus) = synchronized(operationLock) {
+        if (token == generation) _status.value = value
+    }
+
+    fun cancelDownload() = synchronized(operationLock) {
+        generation++
         downloadJob?.cancel()
         downloadJob = null
         _status.value = UpdateStatus.Idle
     }
 
     fun dismissUpdate() {
-        _status.value = UpdateStatus.Idle
+        synchronized(operationLock) {
+            if (downloadJob?.isActive != true) {
+                generation++
+                _status.value = UpdateStatus.Idle
+            }
+        }
+    }
+
+    internal fun validateApk(file: File, expected: UpdateInfo? = null) {
+        val flags = PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong())
+        val archive = context.packageManager.getPackageArchiveInfo(file.path, flags) ?: error("安装包无法读取")
+        val installed = context.packageManager.getPackageInfo(context.packageName, flags)
+        require(archive.packageName == context.packageName) { "安装包不属于拾音" }
+        require(archive.longVersionCode > installed.longVersionCode) { "安装包版本不高于当前版本" }
+        expected?.let {
+            require(archive.versionName == it.versionName.trim().removePrefix("v").removePrefix("V")) { "安装包版本与发布信息不一致" }
+            if (it.versionCode > 0) require(archive.longVersionCode == it.versionCode.toLong()) { "安装包内部版本号不一致" }
+        }
+        fun hashes(signatures: Array<android.content.pm.Signature>) = signatures.map {
+            MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { byte -> "%02x".format(byte) }
+        }.toSet()
+        val incoming = archive.signingInfo ?: error("安装包缺少签名")
+        val local = installed.signingInfo ?: error("当前应用签名无法读取")
+        val same = if (local.hasMultipleSigners() || incoming.hasMultipleSigners()) {
+            hashes(local.apkContentsSigners) == hashes(incoming.apkContentsSigners)
+        } else hashes(local.apkContentsSigners).all { it in hashes(incoming.signingCertificateHistory) }
+        require(same) { "安装包签名与当前应用不一致" }
     }
 
     fun installApk(apkFile: File) {
         if (!apkFile.exists()) {
             _status.value = UpdateStatus.Error("安装包文件不存在，请重新下载")
+            return
+        }
+
+        try {
+            require(apkFile.canonicalFile.parentFile == updatesDirectory.canonicalFile && apkFile.name.startsWith("update-") && apkFile.extension == "apk") { "安装包路径无效" }
+            validateApk(apkFile, downloadedInfo)
+        } catch (e: Exception) {
+            _status.value = UpdateStatus.Error(e.message ?: "安装包校验失败")
             return
         }
 

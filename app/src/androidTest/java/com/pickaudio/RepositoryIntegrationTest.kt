@@ -14,6 +14,7 @@ import com.pickaudio.data.preferences.UserPreferences
 import com.pickaudio.data.repository.*
 import com.pickaudio.download.DownloadCoordinator
 import com.pickaudio.source.LxSourceManager
+import com.pickaudio.network.NetworkPolicy
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.junit.*
@@ -30,6 +31,9 @@ class RepositoryIntegrationTest {
     private lateinit var db: PickAudioDatabase
     private lateinit var previousPreferences: Map<String, String>
     private val published = mutableListOf<Uri>()
+    private val sourceManagers = mutableListOf<LxSourceManager>()
+    private fun createSourceManager() = LxSourceManager(context, db, NetworkPolicy(setOf("localhost", "127.0.0.1")))
+        .also { sourceManagers.add(it) }
 
     @Before fun setup() = runBlocking {
         previousPreferences = UserPreferences(context).exportSettings()
@@ -39,6 +43,7 @@ class RepositoryIntegrationTest {
     @After fun cleanup() = runBlocking {
         UserPreferences(context).restoreSettings(previousPreferences)
         published.forEach { context.contentResolver.delete(it, null, null) }
+        sourceManagers.forEach { it.close() }
         db.close()
     }
     private suspend fun seed(id: String = "test_song"): Track {
@@ -103,7 +108,7 @@ class RepositoryIntegrationTest {
 
     @Test fun interruptedDownloadsRecoverAndCacheCleanupPreservesTheirParts() = runBlocking {
         seed()
-        val manager = LxSourceManager(context, db)
+        val manager = createSourceManager()
         manager.ensureBuiltinSources()
         val coordinator = DownloadCoordinator(context, db, manager)
         val retained = File(coordinator.partialDirectory, "temp_test_interrupted.part").apply { writeBytes(ByteArray(2048)) }
@@ -125,7 +130,8 @@ class RepositoryIntegrationTest {
 
     @Test fun roomMigrationPreservesSongsPlaylistsAndDownloads() = runBlocking {
         val name = "pickaudio-migration-${System.nanoTime()}.db"
-        fun open() = Room.databaseBuilder(context, PickAudioDatabase::class.java, name).addMigrations(PickAudioDatabase.MIGRATION_1_2).build()
+        fun open() = Room.databaseBuilder(context, PickAudioDatabase::class.java, name)
+            .addMigrations(PickAudioDatabase.MIGRATION_1_2, PickAudioDatabase.MIGRATION_2_3, PickAudioDatabase.MIGRATION_3_4).build()
         var disk = open()
         disk.trackDao().insertOrUpdate(TrackEntity("legacy", "旧歌曲", "歌手", "专辑", 120000, null))
         disk.playlistDao().insertOrUpdate(PlaylistEntity("legacy_playlist", "旧歌单"))
@@ -135,7 +141,13 @@ class RepositoryIntegrationTest {
         try {
             SQLiteDatabase.openDatabase(context.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE).use { sqlite ->
                 sqlite.execSQL("ALTER TABLE local_assets DROP COLUMN folderName")
+                listOf("folderId", "fileName", "audioInfoJson", "unavailableReason").forEach { sqlite.execSQL("ALTER TABLE local_assets DROP COLUMN $it") }
                 listOf("actualQuality", "bytesPerSecond", "etaSeconds", "resourceEtag", "durationMs").forEach { sqlite.execSQL("ALTER TABLE download_tasks DROP COLUMN $it") }
+                listOf("executionGeneration", "publishToken", "publishStage").forEach { sqlite.execSQL("ALTER TABLE download_tasks DROP COLUMN $it") }
+                sqlite.execSQL("ALTER TABLE playback_snapshot DROP COLUMN currentEntryId")
+                sqlite.execSQL("ALTER TABLE playback_snapshot DROP COLUMN queueRevision")
+                sqlite.execSQL("ALTER TABLE favorites DROP COLUMN sortOrder")
+                sqlite.execSQL("DROP TABLE restore_sessions")
                 sqlite.version = 1
             }
             disk = open()
@@ -166,7 +178,7 @@ class RepositoryIntegrationTest {
             }
         }
         try {
-            val sourceManager = LxSourceManager(context, db)
+            val sourceManager = createSourceManager()
             sourceManager.ensureBuiltinSources()
             val script = """
                 /**
@@ -189,11 +201,12 @@ class RepositoryIntegrationTest {
             val completed = db.downloadDao().getTaskById("standard_task")!!
             completed.targetUri?.let { published.add(Uri.parse(it)) }
             assertEquals(completed.errorMessage, "COMPLETED", completed.status)
-            assertEquals("WAV", completed.actualQuality)
+            assertTrue(completed.actualQuality.orEmpty().startsWith("PCM"))
+            assertEquals("PCM", AudioInfo.decode(db.localAssetDao().getAssetsForTrack(first.id).single().audioInfoJson)!!.codec)
             assertEquals("wav", db.localAssetDao().getAssetsForTrack(first.id).single().format)
             val rejected = db.downloadDao().getTaskById("lossless_task")!!
             assertEquals("FAILED", rejected.status)
-            assertTrue(rejected.errorMessage.orEmpty().contains("无损"))
+            assertTrue(rejected.errorMessage.orEmpty().contains("FLAC"))
             assertTrue(db.localAssetDao().getAssetsForTrack(second.id).isEmpty())
         } finally { server.close(); serving.cancel() }
     }

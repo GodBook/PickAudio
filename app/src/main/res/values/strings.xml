@@ -1,3 +1,13 @@
 <resources>
     <string name="app_name">拾音 PickAudio</string>
+    <string name="third_party_title">第三方许可</string>
+    <string name="playback_progress">播放进度</string>
+    <string name="selection_selected">已选中</string>
+    <string name="selection_unselected">未选中</string>
+    <string name="playback_playing">正在播放</string>
+    <string name="playback_current_paused">当前歌曲，已暂停</string>
+    <string name="action_select">多选</string>
+    <string name="diagnostics_export">导出本地诊断</string>
+    <string name="playback_channel">音乐播放</string>
+    <string name="playback_preparing">正在准备播放</string>
 </resources>

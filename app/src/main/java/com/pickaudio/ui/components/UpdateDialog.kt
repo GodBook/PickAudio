@@ -1,5 +1,7 @@
 package com.pickaudio.ui.components
 
+import androidx.compose.ui.res.stringResource
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -96,7 +98,7 @@ fun UpdateDialog(
                             onClick = onDismiss,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("确定")
+                            Text(stringResource(com.pickaudio.R.string.ui_updatedialog_001))
                         }
                     }
 
@@ -167,13 +169,13 @@ fun UpdateDialog(
                                 onClick = onDismiss,
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("稍后再说")
+                                Text(stringResource(com.pickaudio.R.string.ui_updatedialog_002))
                             }
                             Button(
                                 onClick = { onStartDownload(info) },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("立即更新")
+                                Text(stringResource(com.pickaudio.R.string.ui_updatedialog_003))
                             }
                         }
 
@@ -188,7 +190,7 @@ fun UpdateDialog(
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("在浏览器中打开 Release", style = MaterialTheme.typography.labelSmall)
+                            Text(stringResource(com.pickaudio.R.string.ui_updatedialog_004), style = MaterialTheme.typography.labelSmall)
                         }
                     }
 
@@ -233,7 +235,7 @@ fun UpdateDialog(
                             onClick = onCancelDownload,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("取消下载")
+                            Text(stringResource(com.pickaudio.R.string.ui_downloadscreen_007))
                         }
                     }
 
@@ -266,13 +268,13 @@ fun UpdateDialog(
                                 onClick = onDismiss,
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("稍后")
+                                Text(stringResource(com.pickaudio.R.string.ui_updatedialog_005))
                             }
                             Button(
                                 onClick = { onInstall(status.apkFile) },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("立即安装")
+                                Text(stringResource(com.pickaudio.R.string.ui_updatedialog_006))
                             }
                         }
                     }
@@ -307,13 +309,13 @@ fun UpdateDialog(
                                 onClick = onDismiss,
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("关闭")
+                                Text(stringResource(com.pickaudio.R.string.ui_musicactions_003))
                             }
                             Button(
                                 onClick = onRetry,
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("重试")
+                                Text(stringResource(com.pickaudio.R.string.action_retry))
                             }
                         }
                     }
