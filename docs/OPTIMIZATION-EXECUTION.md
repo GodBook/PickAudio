@@ -16,7 +16,9 @@
 
 正式签名覆盖升级已通过：专用emulator-5560安装原正式v1.2.0，写入v2夹具，直接以install -r升级v1.3.0。UID保留，Room为v4；歌曲、资源、在线引用、歌单、收藏时间、重复队列条目701/702及3500ms暂停快照、手动歌词/300ms校准、自定义源与绑定、设置文件字节完全保留；1024字节暂停下载保留，integrity_check=ok且无外键错误。脚本scripts/verify-release-upgrade.ps1，结果app/build/release-1.3.0/upgrade-verification.json。替换测试签名之前，原专用设备调试数据已归档至pre-upgrade-debug-data.tar，未操作个人设备。
 
-下一步：提交已验收代码及发布资料，推送GitHub并完成首次远端CI；上传和发布v1.3.0，再同步根version.json与公开安装入口。根version.json暂保留已发布v1.2.0，避免出现不可下载的更新入口。
+代码已提交并推送main（4172f6ea696c8bfe9fa8791c734f21b7a82a36fd）。首次CI运行37496522393在setup-android阶段失败，原因是默认安装已下线的tools包；测试尚未运行。现明确安装SDK36、build-tools35、NDK28.2与CMake3.22.1，重跑相同检查。APK另重新生成提交后的源码版本标识，代码与资源行为保持不变；最终安装包哈希以发布时的记录为准。
+
+下一步：完成远端CI，上传并发布v1.3.0，再同步根version.json与公开安装入口。根version.json暂保留已发布v1.2.0，避免出现不可下载的更新入口。
 
 ## 优化实现验收（2026-10-06）
 
