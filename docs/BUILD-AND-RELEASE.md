@@ -1,6 +1,6 @@
 # 构建、回归与发布基线
 
-应用ID为com.pickaudio，当前源码准备1.3.1/code 11补丁，已公开版本为1.3.0/code 10。version.properties 为源码构建版本的唯一入口；根目录 version.json 描述已公开发布的APK，不随本地构建覆盖，在正式Release可下载后同步。
+应用ID为com.pickaudio，当前正式版本1.3.1/code 11。version.properties 为源码构建版本的唯一入口；根目录 version.json 描述已公开发布的APK，不随本地构建覆盖，在正式Release可下载后同步。
 
 ## 环境和常规检查
 
@@ -66,7 +66,7 @@ Release默认为未签名构建。用户已授权本次GitHub与Release更新，
 
 脚本核对包名、源码版本、单调版本号、正式证书、签名有效性、双ABI、ELF PT_LOAD和APK ZIP的16KiB对齐，输出实际大小、SHA-256与元数据。输出目录限定在app/build，根目录历史version.json不受影响。仅检查本地未签名包时可使用-AllowUnsigned并指定真实较低的PreviousVersionCode；结果明确为publishable=false。
 
-GitHub工作流执行单测、Lint、Debug/Release构建、schema核查以及API36 Debug/裁剪设备回归；v1.3.0的[完整远端CI](https://github.com/GodBook/PickAudio/actions/runs/37504251297)已通过，单测61项、两组设备测试各51项，均无失败或跳过。构建许可材料与准确依赖列表打包进APK。升级依赖时成组更新锁定和校验信息，复查源授权、JNI和音频流程。
+GitHub工作流执行单测、Lint、Debug/Release构建、schema核查以及API36 Debug/裁剪设备回归；v1.3.1的[完整远端CI](https://github.com/GodBook/PickAudio/actions/runs/37507715988)已通过，单测61项、两组设备测试各52项，均无失败或跳过。构建许可材料与准确依赖列表打包进APK。升级依赖时成组更新锁定和校验信息，复查源授权、JNI和音频流程。
 
 托管CI明确安装SDK36/build-tools35/NDK28.2/CMake3.22.1，避免setup-android默认请求已下线的tools包。CI=true时从Google、Maven Central和Gradle Plugin Portal解析依赖；本地环境继续使用既有镜像配置。依赖锁定与摘要校验保持开启。
 

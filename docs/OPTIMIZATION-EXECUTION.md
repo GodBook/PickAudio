@@ -10,13 +10,19 @@
 
 ## 当前发布检查点
 
+1.3.1/code 11补丁已于2026-10-07 02:10:42（Asia/Shanghai）[正式发布](https://github.com/GodBook/PickAudio/releases/tag/v1.3.1)，为GitHub latest，保留1.3.0历史附件。修复默认及导入后自动源绑定的先查后写竞态，默认写入改为INSERT OR IGNORE，不覆盖用户选择或明确禁用。标签指向生产代码提交5e1f5a1702ca4611dd12aa445b381af14765f6e7，[完整CI 37507715988](https://github.com/GodBook/PickAudio/actions/runs/37507715988)三项job均success，61项JVM、两组各52项设备测试无失败或跳过，Lint/schema通过。
+
+本地补丁构建和61项JVM通过，Lint 0错误/61警告，正式包8,156,279字节，SHA-256 a66659446b049c7d5018ee38ea5c2d8213ccfd47844b3565313cc13d49b9ca8d；沿用原证书，双ABI/16KiB ZIP及ELF核验通过。专用设备原签名v1.3.0→v1.3.1覆盖升级保留UID、偏好字节、歌曲/歌单/队列/下载记录、自定义wy绑定与明确禁用tx绑定，Room v4及integrity=ok；自有夹具已清理并恢复原绑定。证据app/build/release-1.3.1/patch-upgrade-verification.json与patch-upgrade-ui.xml。公开APK完整下载HTTP 200，摘要与本地及GitHub服务端digest一致；version.json与README随本次提交同步1.3.1。本轮发布已完成，O25/O26及实体硬件验证保持独立后续范围。
+
+以下为已发布v1.3.0的基线及历史验证。
+
 v1.3.0/code 10已于2026-10-07 01:41:29（Asia/Shanghai）[正式发布](https://github.com/GodBook/PickAudio/releases/tag/v1.3.0)，draft=false、prerelease=false，GitHub latest已指向该版本。注释标签v1.3.0指向b88c9beeba93fa22e3d4c49ad2ebfd2fccd3c908，main已包含优化代码与CI修复。原签名证书已再次核对一致；签名沿用已有本地流程，凭据不写入源码或发布记录。
 
 本地发布构建已完成：61项JVM全部通过，Lint为0错误/61警告。最终正式签名APK为8,156,279字节（7.78MiB），SHA-256 863b976f99f4076eb479be4a3d22824d9ab8910ba0214da1e5b209a654f5417c，证书与原正式版一致，双ABI/16KiB ZIP和ELF检查通过；相对原54,403,842字节减少85.01%。APK位于项目根PickAudio-v1.3.0-release.apk；构建与签名核查原始记录位于app/build/release-1.3.0。APK内源码标识为4172f6e；签名前已比对全部代码/资源ZIP条目与覆盖升级验收包一致，只更新源码标识及签名元数据。
 
 正式签名覆盖升级已通过：专用emulator-5560安装原正式v1.2.0，写入v2夹具，直接以install -r升级v1.3.0。UID保留，Room为v4；歌曲、资源、在线引用、歌单、收藏时间、重复队列条目701/702及3500ms暂停快照、手动歌词/300ms校准、自定义源与绑定、设置文件字节完全保留；1024字节暂停下载保留，integrity_check=ok且无外键错误。脚本scripts/verify-release-upgrade.ps1，结果app/build/release-1.3.0/upgrade-verification.json。替换测试签名之前，原专用设备调试数据已归档至pre-upgrade-debug-data.tar，未操作个人设备。
 
-发布提交的[GitHub CI 37504251297](https://github.com/GodBook/PickAudio/actions/runs/37504251297)已完整通过：61项JVM单测、Debug/Release构建、Lint、Room schema，以及Debug/validation各51项API36设备测试，均无失败或跳过。三项job均为success；设备原始日志为ci-37504251297-debug-log.txt、ci-37504251297-validation-log.txt。后续CI、校验元数据和测试修正均未改动4172f6e以来的应用生产代码、构建版本或生产裁剪规则，已以git diff复核。
+v1.3.0发布提交的[GitHub CI 37504251297](https://github.com/GodBook/PickAudio/actions/runs/37504251297)已完整通过：61项JVM单测、Debug/Release构建、Lint、Room schema，以及Debug/validation各51项API36设备测试，均无失败或跳过。三项job均为success；设备原始日志为ci-37504251297-debug-log.txt、ci-37504251297-validation-log.txt。该版本发布前的CI、校验元数据和测试修正未改动4172f6e以来的生产代码、构建版本或裁剪规则；随后1.3.1修复另有新生产代码及验收。
 
 首次CI发现的环境问题均已修复：明确SDK包以替代已下线的tools；托管CI使用官方仓库，避免镜像502；逐件核对官方SHA1、坐标与版本约束后补齐插件marker、父POM及BOM/module摘要，严格校验和锁定始终开启。transform-api两份JAR只有相同的25字节MANIFEST，逐条核对ZIP内容一致，POM均无依赖。官方文件保存在official-poms，13组UTP配置单独严格解析通过，记录official-utp-check.txt。
 
@@ -26,7 +32,7 @@ v1.3.0/code 10已于2026-10-07 01:41:29（Asia/Shanghai）[正式发布](https:/
 
 version.json与README已同步main（eb715e391e0ba5ce3cc1f562e6675aad9d1aab42），GitHub API、raw主分支与备用CDN均核对版本、下载URL、大小及SHA-256一致。专用设备上的原签名v1.3.0实际点击“检查更新”后显示“已是最新版本”，原始记录release-130-update-ui.xml。
 
-2026-10-07发布后复验37505972054：build和validation通过，Debug 51项中只有thrownNetworkCallbackFailsResolutionImmediately失败，assert收到空错误，解析意外成功。结合ensureBuiltinSources的先读后REPLACE及构造器后台初始化，确认默认源写入与自定义绑定存在竞态；晚到默认写入可能覆盖用户选择。已改为数据库INSERT OR IGNORE默认绑定，并新增确定性覆盖“默认源先读空→用户写入→晚到默认插入”、明确禁用及真正未配置平台。生产代码发生变化，准备另发1.3.1/code 11，保留既有1.3.0附件。当前修复未验收，需重新构建、签名、完整CI、覆盖升级、公开下载验证；根version.json在补丁公开前保持1.3.0。
+2026-10-07发布后复验37505972054：build和validation通过，Debug 51项中只有thrownNetworkCallbackFailsResolutionImmediately失败，assert收到空错误，解析意外成功。结合ensureBuiltinSources的先读后REPLACE及构造器后台初始化，确认默认源写入与自定义绑定存在竞态；晚到默认写入可能覆盖用户选择。已改为数据库INSERT OR IGNORE默认绑定，并新增确定性覆盖“默认源先读空→用户写入→晚到默认插入”、明确禁用及真正未配置平台。生产代码发生变化，另发1.3.1/code 11，保留既有1.3.0附件；重新构建、签名、完整CI、覆盖升级和公开下载验证均已完成，根version.json在补丁公开前保持1.3.0。
 
 ## 优化实现验收（2026-10-06）
 
