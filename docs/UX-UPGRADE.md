@@ -28,11 +28,11 @@
 - 当前改动：T01–T11 已实现并验收；1.2.0 内部版本号由 8 提升至 9，修复当前／旧版更新误报，更新说明、版本描述和正式签名安装包已同步。
 - 当前发现并修复：QuickJS 初始化计时、跨协程线程栈顶与异步结果等待；Room REPLACE 更新歌曲／歌单导致关联被级联删除，已改为 Upsert。新建并批量加入通过原子事务验证；旧版下载临时文件迁移通过验证。
 - 交付：项目根目录 `PickAudio-v1.2.0-release.apk`，使用原项目签名，可覆盖旧正式版；原签名 APK 和模拟器夹具备份保留在 `app/build/ux-verification`。签名凭据不写入项目文件。
-- 当前目标：将已验收的 1.2.0 源码和文档提交至 GitHub main，推送 v1.2.0 标签并发布原签名 APK；核对公开 Release、安装包大小／SHA-256 和远端版本描述。
-- 发布检查点：已核对远端 main 与本地起点 `0ebd1c2` 一致，GitHub 当前最新版本为 1.1.6，无 v1.2.0 标签或 Release；本地安装包大小与 SHA-256 均与验收记录一致。
+- 当前目标：1.2.0 本地体验升级、正式签名产物交付与 GitHub 正式发布均已完成；公开安装包、最新版入口和远端版本描述均通过发布核验。
+- 发布检查点：源码和文档提交 `34ea334c410afba9b11d5485b722db04e09a0a75` 已推送至 main，v1.2.0 标签指向同一提交。[v1.2.0 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.2.0) 已公开并设为最新正式版，编号 `404349732`；安装包大小、SHA-256 和远端 `version.json` 均核对一致。
 - 环境恢复：使用 API 36 模拟器时优先冷启动；本轮快照恢复导致系统服务暂停，已改用保留数据的冷启动并恢复原验证夹具。完成 Android 自动化测试后，先强制停止并重新启动应用，再做人工检查。
 - 验证入口：PowerShell 设置 `JAVA_HOME=D:/dev/jdk-17` 后运行 `./gradlew.bat :app:testDebugUnitTest :app:assembleDebug :app:lintDebug`。
-- 发布授权：用户明确要求“更新GITHUB和release”，包含提交、推送、版本标签、安装包上传和正式发布；当前正在执行，无需再次确认。
+- 发布授权：用户明确要求“更新GITHUB和release”，包含提交、推送、版本标签、安装包上传和正式发布；已按此范围完成并验证。
 
 ## 决策
 
@@ -70,3 +70,12 @@
 - 视觉：人工核对正式版曲库、播放器和歌词；曲库滚动后歌曲、歌手、专辑及来源完整可见，当前歌词和校准按钮可见。截图：`app/build/ux-verification/library-final-large.png`、`player-final-large.png`、`lyrics-final-large.png`。
 - 静态检查：0 错误、56 条非阻断提示。
 - 交付安装包：`PickAudio-v1.2.0-release.apk`，大小 54,403,842 字节；SHA-256：`2f60cb8df209bcb0688ed6ed50de8462cbc3b1c8e832b076d615700b7a99a511`。versionName 1.2.0、versionCode 9、原签名证书及双 ABI 的 16KB 对齐均通过。
+
+## 2026-10-06 GitHub 与 Release 发布
+
+- 仓库：[GodBook/PickAudio](https://github.com/GodBook/PickAudio)，源码与更新文档已推送至 main；发布源码提交为 `34ea334c410afba9b11d5485b722db04e09a0a75`。本次发布后的记录补充仅修改文档。
+- 标签：v1.2.0 为附注标签，远端解析后指向上述源码提交。
+- Release：[拾音 PickAudio 1.2.0 · 日常体验优化](https://github.com/GodBook/PickAudio/releases/tag/v1.2.0)，编号 `404349732`；发布时间为 2026-10-06 13:37:09（Asia/Shanghai）。已公开，非预发布，GitHub `/releases/latest` 返回 v1.2.0。
+- 更新说明：Release 正文与 `docs/RELEASE-1.2.0.md` 核对一致，包含体验优化、常用入口、升级要求和安装包校验信息。
+- 安装包：[`PickAudio-v1.2.0-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.2.0/PickAudio-v1.2.0-release.apk)，GitHub 资源编号 `614600616`，状态为 `uploaded`；大小 54,403,842 字节，服务端 SHA-256 与上方正式签名产物一致。公开下载地址跟随重定向后返回 HTTP 200。
+- 版本描述：公开 `main/version.json` 与本地所有字段一致，versionName 为 1.2.0、versionCode 为 9，安装包大小及下载／Release 地址正确。
