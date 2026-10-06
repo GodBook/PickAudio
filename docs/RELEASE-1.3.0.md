@@ -35,5 +35,5 @@
 - 下载：[`PickAudio-v1.3.0-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.3.0/PickAudio-v1.3.0-release.apk)
 - 版本：1.3.0（内部版本号 10），沿用原项目签名。
 - 大小：8,156,279 字节（约 7.78 MiB），相对 v1.2.0 的 54,403,842 字节减少 85.01%。
-- SHA-256：`77f87cf992b5c1d0c1b1e759daf7aafd3d1045eb6729b4312789d04d67a7c6ea`
+- SHA-256：`863b976f99f4076eb479be4a3d22824d9ab8910ba0214da1e5b209a654f5417c`
 - 签名证书 SHA-256：`1e564b554f48b6a69d80e6d76c704e8b16e9a600d2511205754839c729d4a281`

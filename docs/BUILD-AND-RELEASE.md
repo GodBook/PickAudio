@@ -68,6 +68,8 @@ Release默认为未签名构建。用户已授权本次GitHub与Release更新，
 
 GitHub工作流执行单测、Lint、Debug/Release构建、schema核查以及API36 Debug/裁剪设备回归；工作流尚须在远端首次运行确认。构建许可材料与准确依赖列表打包进APK。升级依赖时成组更新锁定和校验信息，复查源授权、JNI和音频流程。
 
+托管CI明确安装SDK36/build-tools35/NDK28.2/CMake3.22.1，避免setup-android默认请求已下线的tools包。CI=true时从Google、Maven Central和Gradle Plugin Portal解析依赖；本地环境继续使用既有镜像配置。依赖锁定与摘要校验保持开启。
+
 ## 系统备份范围
 
 禁用系统自动云备份，并用data-extraction-rules同时排除设备迁移中的私有文件、数据库与偏好，避免搬迁旧URI授权、脚本和活动下载状态。用户使用设置中的手动备份：恢复歌曲、歌单、收藏、歌词/校准和偏好；音频及源脚本另行保存，恢复会话可继续。缓存、下载临时文件和设备绑定授权不进入手动备份。

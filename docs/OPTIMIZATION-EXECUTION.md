@@ -12,11 +12,11 @@
 
 目标：将已验收优化发布为v1.3.0（versionCode 10），更新GitHub主分支和正式Release。远端最新为v1.2.0/code 9，main仍为上述基线，当前账号具备管理权限，分支未受保护。原签名证书已再次核对一致；签名沿用已有本地流程，凭据不写入源码或发布记录。
 
-本地发布构建已完成：61项JVM全部通过，Lint为0错误/61警告。正式签名APK为8,156,279字节（7.78MiB），SHA-256 77f87cf992b5c1d0c1b1e759daf7aafd3d1045eb6729b4312789d04d67a7c6ea，证书与原正式版一致，双ABI/16KiB ZIP和ELF检查通过；相对原54,403,842字节减少85.01%。APK位于项目根PickAudio-v1.3.0-release.apk；构建与签名核查原始记录位于app/build/release-1.3.0。
+本地发布构建已完成：61项JVM全部通过，Lint为0错误/61警告。最终正式签名APK为8,156,279字节（7.78MiB），SHA-256 863b976f99f4076eb479be4a3d22824d9ab8910ba0214da1e5b209a654f5417c，证书与原正式版一致，双ABI/16KiB ZIP和ELF检查通过；相对原54,403,842字节减少85.01%。APK位于项目根PickAudio-v1.3.0-release.apk；构建与签名核查原始记录位于app/build/release-1.3.0。APK内源码标识为4172f6e；签名前已比对全部代码/资源ZIP条目与覆盖升级验收包一致，只更新源码标识及签名元数据。
 
 正式签名覆盖升级已通过：专用emulator-5560安装原正式v1.2.0，写入v2夹具，直接以install -r升级v1.3.0。UID保留，Room为v4；歌曲、资源、在线引用、歌单、收藏时间、重复队列条目701/702及3500ms暂停快照、手动歌词/300ms校准、自定义源与绑定、设置文件字节完全保留；1024字节暂停下载保留，integrity_check=ok且无外键错误。脚本scripts/verify-release-upgrade.ps1，结果app/build/release-1.3.0/upgrade-verification.json。替换测试签名之前，原专用设备调试数据已归档至pre-upgrade-debug-data.tar，未操作个人设备。
 
-代码已提交并推送main（4172f6ea696c8bfe9fa8791c734f21b7a82a36fd）。首次CI运行37496522393在setup-android阶段失败，原因是默认安装已下线的tools包；测试尚未运行。现明确安装SDK36、build-tools35、NDK28.2与CMake3.22.1，重跑相同检查。APK另重新生成提交后的源码版本标识，代码与资源行为保持不变；最终安装包哈希以发布时的记录为准。
+代码已提交并推送main（4172f6ea696c8bfe9fa8791c734f21b7a82a36fd）。首次CI运行37496522393在setup-android阶段失败，原因是默认安装已下线的tools包；明确安装SDK36、build-tools35、NDK28.2与CMake3.22.1后，该阶段已通过。第二轮37497159116在阿里云gradle-plugin镜像下载返回502，尚未进入项目测试；现让CI从官方仓库解析，继续完整检查，依赖锁定/摘要校验未关闭。最终APK已完成源码标识更新和再次覆盖安装。
 
 下一步：完成远端CI，上传并发布v1.3.0，再同步根version.json与公开安装入口。根version.json暂保留已发布v1.2.0，避免出现不可下载的更新入口。
 
