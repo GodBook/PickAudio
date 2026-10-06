@@ -24,6 +24,8 @@
 
 v1.3.0草稿Release已上传最终正式APK与SHA256SUMS.txt；GitHub服务端APK摘要与上述863b976f…一致。草稿尚未发布，不作为公开更新入口。
 
+第五轮37501534968已完成远端单测及Debug/Release构建；Debug/validation设备包也成功构建，但UTP测试运行器解析官方JUnit 5.9.2 BOM module时缺少摘要，尚未执行设备测试。已核验官方SHA1及18项版本约束，补齐该文件的SHA-256。官方源下本地Debug/Release/测试APK与validation/测试APK均构建通过，schema 2..4检查通过。
+
 下一步：完成远端CI，正式发布现有v1.3.0草稿，再同步根version.json与公开安装入口。根version.json暂保留已发布v1.2.0，避免出现不可下载的更新入口。
 
 ## 优化实现验收（2026-10-06）
