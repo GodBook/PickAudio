@@ -18,6 +18,8 @@
 
 代码已提交并推送main（4172f6ea696c8bfe9fa8791c734f21b7a82a36fd）。首次CI运行37496522393在setup-android阶段失败，原因是默认安装已下线的tools包；明确安装SDK36、build-tools35、NDK28.2与CMake3.22.1后，该阶段已通过。第二轮37497159116在阿里云gradle-plugin镜像下载返回502，尚未进入项目测试；现让CI从官方仓库解析，继续完整检查，依赖锁定/摘要校验未关闭。最终APK已完成源码标识更新和再次覆盖安装。
 
+第三轮37498195238在Kotlin Android插件marker POM校验失败：Maven Central与既有镜像的POM字节不同。已从Maven Central直接取得Android/Compose两份POM，核对其上游SHA1，并比较插件实现依赖完全一致（2.0.21）；仅补充这两份官方POM的SHA-256，JAR摘要与严格校验保持不变。KSP marker官方POM与原摘要一致。
+
 下一步：完成远端CI，上传并发布v1.3.0，再同步根version.json与公开安装入口。根version.json暂保留已发布v1.2.0，避免出现不可下载的更新入口。
 
 ## 优化实现验收（2026-10-06）
