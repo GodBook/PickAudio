@@ -86,7 +86,8 @@ class UiFlowTest {
         compose.onNode(hasSetTextAction()).performImeAction()
         compose.waitUntil(5000) { manager.platformStates["tx"]?.error != null }
         compose.onNodeWithText("可用歌曲").assertExists()
-        compose.onNodeWithText("重试此平台").performScrollTo().assertIsDisplayed()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("重试此平台"))
+        compose.onNodeWithText("重试此平台").assertIsDisplayed()
         compose.onNodeWithContentDescription("下载管理").assertExists()
     }
 

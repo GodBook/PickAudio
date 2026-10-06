@@ -26,6 +26,8 @@ v1.3.0草稿Release已上传最终正式APK与SHA256SUMS.txt；GitHub服务端AP
 
 第五轮37501534968已完成远端单测及Debug/Release构建；Debug/validation设备包也成功构建，但UTP测试运行器解析官方JUnit 5.9.2 BOM module时缺少摘要，尚未执行设备测试。已核验官方SHA1及18项版本约束，补齐该文件的SHA-256。官方源下本地Debug/Release/测试APK与validation/测试APK均构建通过，schema 2..4检查通过。
 
+第六轮37502907913构建、61项单测、Lint与schema已通过；Debug完整51项中50项通过，平台错误重试UI断言在较小屏幕失败。原因是LazyColumn尚未组合屏幕下方按钮，performScrollTo要求目标节点先存在；改为对列表performScrollToNode查找目标，再保留assertIsDisplayed。只修改测试，不修改应用代码或APK。官方源下13组UTP配置已逐一解析并通过严格校验，记录official-utp-check.txt。
+
 下一步：完成远端CI，正式发布现有v1.3.0草稿，再同步根version.json与公开安装入口。根version.json暂保留已发布v1.2.0，避免出现不可下载的更新入口。
 
 ## 优化实现验收（2026-10-06）
