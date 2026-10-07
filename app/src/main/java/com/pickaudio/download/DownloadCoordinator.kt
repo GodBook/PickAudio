@@ -88,6 +88,8 @@ class DownloadCoordinator(
                     database.trackDao().insertOrUpdate(TrackEntity(canonicalId, title, artist, album, durationMs, coverUri))
                 if (ref == null) database.onlineRefDao().insertOrUpdate(OnlineRefEntity(
                     trackId = canonicalId, platform = platform, platformSongId = platformSongId, platformMetadataJson = metadataJson))
+                else if (metadataJson.isNotBlank() && metadataJson != "{}" && ref.platformMetadataJson != metadataJson)
+                    database.onlineRefDao().insertOrUpdate(ref.copy(platformMetadataJson = metadataJson))
                 val task = if (existing == null) DownloadTaskEntity(UUID.randomUUID().toString(), canonicalId,
                     title, artist, album, coverUri, platform, platformSongId, desired, "PENDING", durationMs = durationMs)
                 else if (existing.status in listOf("PAUSED", "FAILED", "COMPLETED", "CANCELLED")) {

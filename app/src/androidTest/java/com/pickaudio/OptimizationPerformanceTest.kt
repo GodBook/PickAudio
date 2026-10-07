@@ -25,7 +25,7 @@ class OptimizationPerformanceTest {
             .setQueryCallback({ sql, _ -> if (sql.startsWith("SELECT", true)) queries.add(sql) }, Executor { it.run() }).build()
         try {
             db.withTransaction {
-                db.trackDao().insertOrUpdateAll((0 until 10000).map { TrackEntity("large_$it", "歌曲 $it", "歌手 ${it % 100}", "专辑 ${it % 50}", 180000, null) })
+                db.trackDao().insertOrUpdateAll((0 until 10000).map { TrackEntity("large_$it", "歌曲 $it", "歌手 ${it % 100}", "专辑 ${it % 50}", 180000, null, isInLibrary = true) })
                 db.playlistDao().insertOrUpdate(PlaylistEntity("large_list", "大库专项"))
                 repeat(20) {
                     db.playlistDao().addTrackToPlaylist(PlaylistTrackEntity("large_list", "large_$it", it))

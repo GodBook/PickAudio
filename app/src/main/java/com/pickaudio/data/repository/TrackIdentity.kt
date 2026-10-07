@@ -15,10 +15,15 @@ internal suspend fun PickAudioDatabase.ensureTrackIdentity(track: Track): Track 
     val songId = track.platformSongId ?: platform?.let { track.id.removePrefix("online_${it}_") }
     val existing = if (platform != null && !songId.isNullOrBlank()) onlineRefDao().getByPlatformId(platform, songId) else null
     val id = existing?.trackId ?: track.id
-    if (trackDao().getTrackById(id) == null) trackDao().insertOrUpdate(TrackEntity(
+    val record = trackDao().getTrackById(id)
+    if (record == null) trackDao().insertOrUpdate(TrackEntity(
         id, track.title, track.artist, track.album, track.durationMs, track.coverUri, track.trackNumber))
     if (platform != null && !songId.isNullOrBlank() && existing == null && onlineRefDao().getByTrackId(id) == null)
         onlineRefDao().insertOrUpdate(OnlineRefEntity(trackId = id, platform = platform,
             platformSongId = songId, platformMetadataJson = track.platformMetadataJson))
-    track.copy(id = id)
+    if (existing != null && track.platformMetadataJson != "{}" && track.platformMetadataJson.isNotBlank() &&
+        existing.platformMetadataJson != track.platformMetadataJson) {
+        onlineRefDao().insertOrUpdate(existing.copy(platformMetadataJson = track.platformMetadataJson))
+    }
+    track.copy(id = id, isInLibrary = record?.isInLibrary ?: false)
 }

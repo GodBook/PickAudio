@@ -12,6 +12,8 @@ import com.pickaudio.data.db.SourceScriptEntity
 import com.pickaudio.data.model.SearchSongItem
 import com.pickaudio.online.AlternativeVersionException
 import com.pickaudio.online.NetEaseSearchAdapter
+import com.pickaudio.online.QqMusicPlaybackAdapter
+import com.pickaudio.online.QqMusicSearchAdapter
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -87,7 +89,16 @@ class LxSourceManager(
             .dns(object : Dns {
                 override fun lookup(hostname: String) = network.getAllByName(hostname).toList()
             }).build()
-        return networkPolicy.client(routed)
+        return networkPolicy.client(routed).newBuilder().addInterceptor { chain ->
+            val request = chain.request()
+            val qqStream = request.url.host == "stream.qqmusic.qq.com" || request.url.host.endsWith(".stream.qqmusic.qq.com")
+            val builder = request.newBuilder()
+            if (qqStream) {
+                if (request.header("Referer") == null) builder.header("Referer", "https://y.qq.com/")
+                if (request.header("User-Agent") == null) builder.header("User-Agent", "Mozilla/5.0")
+            }
+            chain.proceed(builder.build())
+        }.build()
     }
     private val _sourceHealth = MutableStateFlow<Map<String, String>>(emptyMap())
     val sourceHealth = _sourceHealth.asStateFlow()
@@ -349,17 +360,17 @@ class LxSourceManager(
         try {
             val builtinId = "builtin_aggregate"
             val existing = sourceDao.getSourceById(builtinId)
-            if (existing == null || existing.version != "1.2.0") {
+            if (existing == null || existing.version != "1.3.2") {
                 val entity = SourceScriptEntity(
                     id = builtinId,
                     name = "拾音官方聚合音源",
-                    version = "1.2.0",
+                    version = "1.3.2",
                     author = "PickAudio Official",
-                    description = "网易云多线路播放；QQ 原版本不可用时提供其他平台候选版本，需手动确认。内置线路提供标准与高品质，不宣称无损。",
+                    description = "网易云多线路播放；QQ 优先请求原曲，平台拒绝匿名播放时可更换音源或确认其他平台候选。内置线路提供标准与高品质，不宣称无损。",
                     homepage = "https://github.com/GodBook/PickAudio",
-                    scriptHash = "builtin_aggregate_v110",
+                    scriptHash = "builtin_aggregate_v132",
                     scriptContent = "// PickAudio Built-in Multi-Engine Aggregator",
-                    capabilitiesJson = """{"wy":{"platform":"wy","name":"网易云","actions":["musicUrl"],"qualities":["128k","320k"]},"tx":{"platform":"tx","name":"QQ音乐候选版本","actions":["musicUrl"],"qualities":["128k","320k"]}}""",
+                    capabilitiesJson = """{"wy":{"platform":"wy","name":"网易云","actions":["musicUrl"],"qualities":["128k","320k"]},"tx":{"platform":"tx","name":"QQ音乐","actions":["musicUrl"],"qualities":["128k","320k"]}}""",
                     isEnabled = true
                 )
                 sourceDao.insertOrUpdate(entity)
@@ -389,16 +400,15 @@ class LxSourceManager(
                 if (selection != null && sourceId == null) error("未配置音乐源，请选择支持此平台的音源后重试")
                 val supported = supportedQualities(platform)
                 require(quality in supported) { "当前音源不支持所选音质，请选择：${supported.joinToString()}" }
-                var sourceIdentity = "builtin_aggregate:v1"
+                val metadata = platformMetadata(platform, songId, network)
+                var sourceIdentity = "builtin_aggregate:v132"
                 val url = if (sourceId == null || sourceId == "builtin_aggregate") {
-                    resolveBuiltinMusicUrl(platform, songId, quality, title, artist, network)
+                    resolveBuiltinMusicUrl(platform, songId, quality, title, artist, network, metadata)
                 } else {
                     val source = sourceDao.getSourceById(sourceId) ?: error("音源已移除")
                     sourceIdentity = "$sourceId:${source.scriptHash}"
                     withEngine(source.scriptContent, sourceId, network) { engine, _ ->
-                        val musicInfo = database.onlineRefDao().getByPlatformId(platform, songId)?.platformMetadataJson
-                            ?.let { runCatching { JsonParser.parseString(it).asJsonObject }.getOrNull() } ?: JsonObject()
-                        musicInfo.addProperty("songmid", songId); musicInfo.addProperty("id", songId)
+                        val musicInfo = lxMusicInfo(platform, songId, metadata, title, artist)
                         val request = JsonObject().apply {
                             addProperty("source", platform); addProperty("action", "musicUrl")
                             add("info", JsonObject().apply { addProperty("type", quality); add("musicInfo", musicInfo) })
@@ -429,13 +439,34 @@ class LxSourceManager(
         }
     }
 
+    private suspend fun platformMetadata(platform: String, songId: String, network: Network?): String {
+        val ref = database.onlineRefDao().getByPlatformId(platform, songId)
+        val stored = ref?.platformMetadataJson ?: "{}"
+        if (platform != "tx") return stored
+        val info = lxMusicInfo(platform, songId, stored, null, null)
+        val raw = runCatching { JsonParser.parseString(stored).asJsonObject }.getOrElse { JsonObject() }
+        val file = raw.get("file")?.takeIf { it.isJsonObject }?.asJsonObject
+        val hasMedia = listOf(raw.get("strMediaMid"), raw.get("media_mid"), file?.get("media_mid")).any {
+            it?.takeIf { value -> value.isJsonPrimitive }?.asString?.isNotBlank() == true
+        }
+        val numericId = runCatching { info.get("songId")?.asLong }.getOrNull()
+        if (hasMedia && numericId != null && numericId > 0) return stored
+        return try {
+            val fresh = QqMusicSearchAdapter.getSongMetadata(songId, audioClient(quickHttpClient, network))
+            if (ref != null) database.onlineRefDao().insertOrUpdate(ref.copy(platformMetadataJson = fresh))
+            fresh
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { stored }
+    }
+
     private suspend fun resolveBuiltinMusicUrl(
         platform: String,
         songId: String,
         quality: String,
         title: String?,
         artist: String?,
-        network: Network?
+        network: Network?,
+        platformMetadata: String
     ): String {
         val quickClient = audioClient(quickHttpClient, network)
         val encodedId = URLEncoder.encode(songId, "UTF-8")
@@ -491,11 +522,17 @@ class LxSourceManager(
             // Priority 3: NetEase standard outer URL (HTTP 302 stream - rock solid with cross-protocol redirect)
             return "https://music.163.com/song/media/outer/url?id=$encodedId.mp3"
         } else if (platform == "tx") {
+            val ref = database.onlineRefDao().getByPlatformId(platform, songId)
+            val metadata = lxMusicInfo(platform, songId, platformMetadata, title, artist)
+            val originalFailure = try {
+                return QqMusicPlaybackAdapter(quickClient).resolve(songId, metadata.get("strMediaMid").asString, quality)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { e }
             // Cross-platform recordings are candidates, never silently substituted.
             var queryTitle = title
             var queryArtist = artist
             if (queryTitle.isNullOrBlank()) {
-                val dbTrack = database.trackDao().getTrackById("online_tx_$songId")
+                val dbTrack = database.trackDao().getTrackById(ref?.trackId ?: "online_tx_$songId")
                 if (dbTrack != null) {
                     queryTitle = dbTrack.title
                     queryArtist = dbTrack.artist
@@ -503,11 +540,15 @@ class LxSourceManager(
             }
 
             if (!queryTitle.isNullOrBlank()) {
-                val candidates = NetEaseSearchAdapter.search("$queryTitle ${queryArtist.orEmpty()}".trim(), pageSize = 10)
-                if (candidates.isNotEmpty()) throw AlternativeVersionException(candidates)
+                try {
+                    val candidates = NetEaseSearchAdapter.search("$queryTitle ${queryArtist.orEmpty()}".trim(), pageSize = 10)
+                    if (candidates.isNotEmpty()) throw AlternativeVersionException(candidates, originalFailure.message)
+                } catch (e: CancellationException) { throw e }
+                catch (e: AlternativeVersionException) { throw e }
+                catch (_: Exception) { /* Preserve the original QQ error when candidate search also fails. */ }
             }
 
-            throw IllegalStateException("未找到该 QQ 歌曲的可用播放链接，请在音乐源管理中导入专用音源")
+            throw IllegalStateException(originalFailure.message ?: "QQ 原曲暂不可用，请选择支持 QQ 的音乐源", originalFailure)
         }
 
         throw IllegalStateException("不支持的平台: $platform")

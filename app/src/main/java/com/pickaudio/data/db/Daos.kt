@@ -5,6 +5,18 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TrackDao {
+    @Query("SELECT * FROM tracks WHERE isInLibrary = 1 ORDER BY createdAt DESC")
+    fun getLibraryTracks(): Flow<List<TrackEntity>>
+
+    @Query("SELECT id FROM tracks WHERE isInLibrary = 1")
+    fun getLibraryTrackIds(): Flow<List<String>>
+
+    @Query("UPDATE tracks SET isInLibrary = 1, createdAt = :addedAt WHERE id = :id AND isInLibrary = 0")
+    suspend fun addToLibrary(id: String, addedAt: Long): Int
+
+    @Query("UPDATE tracks SET isInLibrary = 0 WHERE id IN (:ids)")
+    suspend fun removeFromLibrary(ids: List<String>)
+
     @Query("SELECT * FROM tracks WHERE id IN (:ids)")
     suspend fun getTracksByIds(ids: List<String>): List<TrackEntity>
     @Query("SELECT * FROM tracks ORDER BY createdAt DESC")

@@ -82,7 +82,7 @@ fun PlaylistDetailScreen(
             actions = { TextButton(onClick = { selecting = !selecting; selectedIds = emptySet() }) { Text(if (selecting) "完成" else "多选") } })
     }, snackbarHost = { SnackbarHost(snack) }, modifier = modifier.fillMaxSize()) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            OutlinedTextField(query, { query = it }, placeholder = { Text(stringResource(com.pickaudio.R.string.ui_playlistdetailscreen_001)) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(16.dp))
+            MusicSearchField(query, { query = it }, stringResource(com.pickaudio.R.string.ui_playlistdetailscreen_001), modifier = Modifier.padding(20.dp))
             FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilledTonalButton(onClick = { playbackCoordinator.setPlaybackMode(PlaybackMode.SEQUENTIAL); playbackCoordinator.setQueueAndPlay(tracks) }, enabled = tracks.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.ui_libraryscreen_012)) }
                 OutlinedButton(onClick = { playbackCoordinator.setPlaybackMode(PlaybackMode.SHUFFLE); playbackCoordinator.setQueueAndPlay(tracks.shuffled()) }, enabled = tracks.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.ui_playlistdetailscreen_002)) }
@@ -103,6 +103,11 @@ fun PlaylistDetailScreen(
                 }
                 itemsIndexed(tracks, key = { _, item -> item.id }) { index, track ->
                     val actions = mutableListOf(
+                        TrackMenuAction(if (track.isInLibrary) "已在曲库" else "加入曲库", enabled = !track.isInLibrary) { scope.launch {
+                            try { app.libraryRepository.addTracks(listOf(track)); snack.showSnackbar("已加入曲库") }
+                            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                            catch (e: Exception) { snack.showSnackbar(e.message ?: "加入曲库失败") }
+                        } },
                         TrackMenuAction("下一首播放") { playbackCoordinator.playNext(track) },
                         TrackMenuAction("添加到队尾") { playbackCoordinator.addToQueue(track) },
                         TrackMenuAction("加入其他歌单") { addTracks = listOf(track) },

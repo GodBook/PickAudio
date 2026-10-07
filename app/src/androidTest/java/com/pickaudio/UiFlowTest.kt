@@ -53,6 +53,45 @@ class UiFlowTest {
         compose.onNodeWithText("选择文件夹").assertIsDisplayed()
     }
 
+    @Test fun listeningStaysOutOfLibraryUntilPlayerAddButtonIsClicked() {
+        val item = SearchSongItem("tx", "ui_library_membership", "QQ 曲库加入验证", "测试歌手", "测试专辑", 180000,
+            metadataJson = """{"songid":123,"strMediaMid":"fixture_media"}""")
+        val previous = runBlocking { app.database.sourceDao().getSelectionForPlatform("tx") }
+        val source = runBlocking { app.sourceManager.importSourceFromCode("""
+            lx.on(lx.EVENT_NAMES.request, () => new Promise(() => {}));
+            lx.send(lx.EVENT_NAMES.inited, {status:true,sources:{tx:{name:'曲库UI专项',actions:['musicUrl'],qualitys:['128k']}}});
+        """.trimIndent()) }
+        try {
+            runBlocking { app.sourceManager.selectSourceForPlatform("tx", source.id) }
+            val manager = SearchStateManager(scope) { platform, _, _ -> if (platform == "tx") listOf(item) else emptyList() }
+            start(manager)
+            compose.onNodeWithText("搜索").performClick()
+            compose.onNode(hasSetTextAction()).performTextInput("曲库验证")
+            compose.onNode(hasSetTextAction()).performImeAction()
+            compose.waitUntil(5000) { manager.platformStates["tx"]?.items?.isNotEmpty() == true }
+            compose.onNodeWithText(item.title).performClick()
+            compose.waitUntil(5000) { app.playbackCoordinator.currentTrack.value?.id == "online_tx_${item.songId}" }
+            runBlocking { app.playbackCoordinator.flushPersistence() }
+            assertFalse(runBlocking { app.libraryRepository.libraryTrackIds.first() }.contains("online_tx_${item.songId}"))
+            assertFalse(runBlocking { app.libraryRepository.getAllTracks().first() }.any { it.id == "online_tx_${item.songId}" })
+            compose.onNodeWithText("加入曲库").performClick()
+            compose.waitUntil(5000) { runBlocking { app.libraryRepository.libraryTrackIds.first() }.contains("online_tx_${item.songId}") }
+            compose.onNodeWithText("已在曲库").assertIsDisplayed()
+            compose.onNodeWithContentDescription("收起播放器").performClick()
+            compose.onNodeWithText("曲库").performClick()
+            compose.waitUntil(5000) { compose.onAllNodesWithText(item.title).fetchSemanticsNodes().size == 2 }
+            compose.onAllNodesWithText(item.title).assertCountEquals(2)
+        } finally {
+            runBlocking {
+                withContext(Dispatchers.Main) { app.playbackCoordinator.clearQueue() }
+                app.playbackCoordinator.flushPersistence()
+                app.database.trackDao().deleteById("online_tx_${item.songId}")
+                app.sourceManager.selectSourceForPlatform("tx", previous?.sourceId)
+                app.sourceManager.deleteSource(source.id)
+            }
+        }
+    }
+
     @Test fun settingsQualityAndScanSwitchCanBeChanged() {
         start()
         compose.onNodeWithContentDescription("设置").performClick()
@@ -137,7 +176,7 @@ class UiFlowTest {
         matches[matches.fetchSemanticsNodes().lastIndex].performClick()
         compose.onNodeWithText("重新关联音频").assertExists()
         compose.onNodeWithText("重试").assertExists()
-        compose.onNodeWithContentDescription("播放队列").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("播放队列").assertIsDisplayed().performClick()
         compose.onNodeWithText("清空").performClick()
         compose.onNodeWithText("队列已清空").assertIsDisplayed()
         compose.onNodeWithText("撤销").performClick()

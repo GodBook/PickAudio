@@ -56,7 +56,7 @@ class OptimizationPlaybackTest {
             db.execSQL("INSERT INTO queue_entries (id,trackId,queueOrder) VALUES (7,'A',0),(8,'A',1)")
             db.execSQL("INSERT INTO playback_snapshot (id,currentTrackId,progressMs,playbackMode,shuffleOrderJson,shuffleHistoryJson,updatedAt) VALUES (1,'A',3000,'SHUFFLE','[1]','[0]',1)")
         }
-        migrations.runMigrationsAndValidate(name, 4, true, PickAudioDatabase.MIGRATION_2_3, PickAudioDatabase.MIGRATION_3_4).use { db ->
+        migrations.runMigrationsAndValidate(name, 5, true, PickAudioDatabase.MIGRATION_2_3, PickAudioDatabase.MIGRATION_3_4, PickAudioDatabase.MIGRATION_4_5).use { db ->
             db.query("SELECT currentEntryId,shuffleOrderJson,shuffleHistoryJson FROM playback_snapshot").use {
                 assertTrue(it.moveToFirst()); assertEquals(7L, it.getLong(0)); assertEquals("[8]", it.getString(1)); assertEquals("[7]", it.getString(2))
             }

@@ -131,7 +131,7 @@ class RepositoryIntegrationTest {
     @Test fun roomMigrationPreservesSongsPlaylistsAndDownloads() = runBlocking {
         val name = "pickaudio-migration-${System.nanoTime()}.db"
         fun open() = Room.databaseBuilder(context, PickAudioDatabase::class.java, name)
-            .addMigrations(PickAudioDatabase.MIGRATION_1_2, PickAudioDatabase.MIGRATION_2_3, PickAudioDatabase.MIGRATION_3_4).build()
+            .addMigrations(PickAudioDatabase.MIGRATION_1_2, PickAudioDatabase.MIGRATION_2_3, PickAudioDatabase.MIGRATION_3_4, PickAudioDatabase.MIGRATION_4_5).build()
         var disk = open()
         disk.trackDao().insertOrUpdate(TrackEntity("legacy", "旧歌曲", "歌手", "专辑", 120000, null))
         disk.playlistDao().insertOrUpdate(PlaylistEntity("legacy_playlist", "旧歌单"))
@@ -140,6 +140,7 @@ class RepositoryIntegrationTest {
         disk.close()
         try {
             SQLiteDatabase.openDatabase(context.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE).use { sqlite ->
+                sqlite.execSQL("ALTER TABLE tracks DROP COLUMN isInLibrary")
                 sqlite.execSQL("ALTER TABLE local_assets DROP COLUMN folderName")
                 listOf("folderId", "fileName", "audioInfoJson", "unavailableReason").forEach { sqlite.execSQL("ALTER TABLE local_assets DROP COLUMN $it") }
                 listOf("actualQuality", "bytesPerSecond", "etaSeconds", "resourceEtag", "durationMs").forEach { sqlite.execSQL("ALTER TABLE download_tasks DROP COLUMN $it") }

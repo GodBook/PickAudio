@@ -216,7 +216,21 @@ class LibraryRepository(
             failed = old.failed + if (!success) 1 else 0)
     }
 
-    private val tracksFlow = combine(trackDao.getAllTracks(), favoriteDao.getAllFavoriteTrackIds(), localAssetDao.getAllAssets(), database.onlineRefDao().getAllRefs()) { list, favIds, allAssets, allRefs ->
+    val libraryTrackIds = trackDao.getLibraryTrackIds()
+
+    suspend fun removeTracks(ids: List<String>) = withContext(Dispatchers.IO) {
+        ids.distinct().chunked(900).forEach { trackDao.removeFromLibrary(it) }
+    }
+
+    suspend fun addTracks(tracks: List<Track>): Int = withContext(Dispatchers.IO) {
+        database.withTransaction {
+            tracks.distinctBy { it.id }.sumOf { track ->
+                trackDao.addToLibrary(database.ensureTrackIdentity(track).id, System.currentTimeMillis())
+            }
+        }
+    }
+
+    private val tracksFlow = combine(trackDao.getLibraryTracks(), favoriteDao.getAllFavoriteTrackIds(), localAssetDao.getAllAssets(), database.onlineRefDao().getAllRefs()) { list, favIds, allAssets, allRefs ->
             val favSet = favIds.toSet()
             val assetsByTrack = allAssets.groupBy { it.trackId }
             val refsByTrack = allRefs.groupBy { it.trackId }
@@ -270,8 +284,8 @@ class LibraryRepository(
                     val trackId = existing?.trackId ?: UUID.randomUUID().toString()
                     val cover = "content://media/$volume/audio/albumart/${it.getLong(7)}"
                     val previous = trackDao.getTrackById(trackId)
-                    val record = previous?.copy(title = title, artist = artist, album = album, durationMs = duration, coverUri = cover)
-                        ?: TrackEntity(trackId, title, artist, album, duration, cover)
+                    val record = previous?.copy(title = title, artist = artist, album = album, durationMs = duration, coverUri = cover, isInLibrary = true)
+                        ?: TrackEntity(trackId, title, artist, album, duration, cover, isInLibrary = true)
                     val asset = (existing ?: LocalAssetEntity(trackId = trackId, uri = uri.toString(), sourceType = "MEDIA_STORE",
                         fileSize = it.getLong(5), mimeType = mime, format = name.substringAfterLast('.', "audio").lowercase())).copy(
                         uri = uri.toString(), fileSize = it.getLong(5), mimeType = mime, folderName = "$displayVolume / $folder",
@@ -281,6 +295,7 @@ class LibraryRepository(
                         val duplicate = localAssetDao.getAssetByUri(uri.toString())
                         val canonical = if (existing == null && duplicate != null) duplicate else asset
                         if (canonical.trackId == record.id) trackDao.insertOrUpdate(record)
+                        else trackDao.addToLibrary(canonical.trackId, System.currentTimeMillis())
                         canonical.copy(id = localAssetDao.insertOrUpdate(canonical))
                     }
                     knownAssets[key] = saved
@@ -315,7 +330,7 @@ class LibraryRepository(
             val record = (old ?: TrackEntity(trackId, title, metadata.artist ?: "未知歌手", metadata.album ?: "未知专辑", metadata.durationMs, null))
                 .copy(title = title.take(2000), artist = (metadata.artist ?: old?.artist ?: "未知歌手").take(2000),
                     album = (metadata.album ?: old?.album ?: "未知专辑").take(2000), durationMs = metadata.durationMs,
-                    coverUri = saveArtwork(metadata.artwork) ?: old?.coverUri)
+                    coverUri = saveArtwork(metadata.artwork) ?: old?.coverUri, isInLibrary = true)
             val asset = LocalAssetEntity(id = existing?.takeIf { it.uri == uriString }?.id ?: 0, trackId = trackId, uri = uriString,
                 sourceType = if (fromDirectory) "SAF_DIR" else existing?.sourceType ?: "SAF_FILE",
                 fileSize = sizeHint ?: fileSize(uri), mimeType = metadata.info.mimeType, format = metadata.info.extension,
@@ -323,7 +338,10 @@ class LibraryRepository(
                 folderId = folderId.ifBlank { existing?.folderId.orEmpty() }, fileName = name)
             val saved = database.withTransaction {
                 val duplicate = localAssetDao.getAssetByUri(uriString)
-                if (duplicate != null && duplicate.trackId != trackId) duplicate
+                if (duplicate != null && duplicate.trackId != trackId) {
+                    trackDao.addToLibrary(duplicate.trackId, System.currentTimeMillis())
+                    duplicate
+                }
                 else {
                     trackDao.insertOrUpdate(record)
                     asset.copy(id = localAssetDao.insertOrUpdate(asset.copy(id = duplicate?.id ?: asset.id)))

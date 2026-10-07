@@ -22,7 +22,8 @@ data class TrackEntity(
     val durationMs: Long,
     val coverUri: String?,
     val trackNumber: Int = 0,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "0") val isInLibrary: Boolean = false
 )
 
 @Entity(

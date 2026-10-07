@@ -29,7 +29,8 @@ data class BackupPlaylist(val id: String, val name: String, val sortOrder: Int, 
     val createdAt: Long = 0, val addedAtByTrack: Map<String, Long>? = null)
 data class BackupTrack(val id: String, val title: String, val artist: String, val album: String, val durationMs: Long,
     val platform: String? = null, val platformSongId: String? = null, val coverUri: String? = null,
-    val createdAt: Long = 0, val metadataJson: String? = null, val files: List<BackupFileHint>? = null)
+    val createdAt: Long = 0, val metadataJson: String? = null, val files: List<BackupFileHint>? = null,
+    val isInLibrary: Boolean? = null)
 data class BackupFileHint(val fileSize: Long, val mimeType: String?, val format: String?, val sha256: String?, val folder: String,
     val fileName: String? = null, val folderId: String? = null, val audioInfoJson: String? = null)
 data class BackupFavorite(val trackId: String, val addedAt: Long, val sortOrder: Long)
@@ -91,7 +92,7 @@ class BackupManager(private val context: Context, private val database: PickAudi
                 BackupTrack(it.id, it.title, it.artist, it.album, it.durationMs, ref?.platform, ref?.platformSongId,
                     it.coverUri, it.createdAt, ref?.platformMetadataJson,
                     assets[it.id].orEmpty().map { asset -> BackupFileHint(asset.fileSize, asset.mimeType, asset.format, asset.fileHash,
-                        asset.folderName, asset.fileName, asset.folderId, asset.audioInfoJson) })
+                        asset.folderName, asset.fileName, asset.folderId, asset.audioInfoJson) }, isInLibrary = it.isInLibrary)
             }
             require(database.lyricDao().getLyricCharacterCount() <= MAX_MANIFEST_BYTES) { CAPACITY_MESSAGE }
             val lyrics = database.lyricDao().getAllLyrics().map { BackupLyric(it.trackId, it.offsetMs, it.content, it.sourceType) }
@@ -291,11 +292,15 @@ class BackupManager(private val context: Context, private val database: PickAudi
             val ref = if (song.platform != null && song.platformSongId != null) database.onlineRefDao().getByPlatformId(song.platform, song.platformSongId) else null
             val id = ref?.trackId ?: song.id
             ids[song.id] = id
+            val inLibrary = song.isInLibrary ?: (!song.files.isNullOrEmpty() || song.platform == null)
             if (database.trackDao().getTrackById(id) == null) {
                 database.trackDao().insertOrUpdate(TrackEntity(id, song.title, song.artist, song.album, song.durationMs, song.coverUri,
-                    createdAt = song.createdAt.takeIf { it > 0 } ?: now))
+                    createdAt = song.createdAt.takeIf { it > 0 } ?: now, isInLibrary = inLibrary))
                 added++
-            } else merged++
+            } else {
+                merged++
+                if (inLibrary) database.trackDao().addToLibrary(id, song.createdAt.takeIf { it > 0 } ?: now)
+            }
             if (song.platform != null && song.platformSongId != null && ref == null)
                 database.onlineRefDao().insertOrUpdate(OnlineRefEntity(trackId = id, platform = song.platform, platformSongId = song.platformSongId,
                     platformMetadataJson = song.metadataJson ?: "{}"))

@@ -79,6 +79,25 @@ object QqMusicSearchAdapter {
         SearchPage(result, if (more) page + 1 else null, total)
     }
 
+    internal suspend fun getSongMetadata(songMid: String, requestClient: OkHttpClient = client): String = withContext(Dispatchers.IO) {
+        val url = "https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg?songmid=${URLEncoder.encode(songMid, "UTF-8")}&tpl=yqq_song_detail&format=json"
+        val request = Request.Builder().url(url).header("User-Agent", "Mozilla/5.0").header("Referer", "https://y.qq.com/").build()
+        val body = requestClient.withResponse(request) { response ->
+            check(response.isSuccessful) { "QQ 歌曲信息服务返回 ${response.code}" }
+            response.body?.readLimitedText(256 * 1024) ?: error("QQ 歌曲信息为空")
+        }
+        parseSongMetadata(body, songMid)
+    }
+
+    internal fun parseSongMetadata(body: String, songMid: String): String {
+        val root = JsonParser.parseString(body).asJsonObject
+        check(root.get("code")?.asInt == 0) { "QQ 歌曲信息服务暂不可用" }
+        val item = root.getAsJsonArray("data")?.firstOrNull {
+            it.asJsonObject.get("mid")?.asString == songMid || it.asJsonObject.get("songmid")?.asString == songMid
+        } ?: error("QQ 没有返回该歌曲的信息")
+        return item.toString()
+    }
+
     suspend fun getLyric(songmid: String): Pair<String, String?> = withContext(Dispatchers.IO) {
         val url = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=${URLEncoder.encode(songmid, "UTF-8")}&format=json&nobase64=1"
         val req = Request.Builder()

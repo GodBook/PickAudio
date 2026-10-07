@@ -13,5 +13,6 @@ object VersionMatcher {
     }
 }
 
-class AlternativeVersionException(val candidates: List<SearchSongItem>) :
-    IllegalStateException("该来源暂时无法提供原版本，请确认其他平台的候选歌曲")
+class AlternativeVersionException(val candidates: List<SearchSongItem>, reason: String? = null) :
+    IllegalStateException(reason?.let { "$it。可更换 QQ 音源，或确认其他平台的候选歌曲。" }
+        ?: "该来源暂时无法提供原版本，请确认其他平台的候选歌曲")

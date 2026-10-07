@@ -16,7 +16,7 @@ fun TrackEntity.toTrack(assets: List<LocalAssetEntity>, refs: List<OnlineRefEnti
         platformSongId = ref?.platformSongId ?: inferredPlatform?.let { id.removePrefix("online_${it}_") },
         folderName = hint?.folderName.orEmpty(), sourceType = hint?.sourceType.orEmpty(), createdAt = createdAt,
         folderId = hint?.folderId.orEmpty(), platformMetadataJson = ref?.platformMetadataJson ?: "{}",
-        audioInfo = AudioInfo.decode(asset?.audioInfoJson),
+        audioInfo = AudioInfo.decode(asset?.audioInfoJson), isInLibrary = isInLibrary,
         repairReason = if (asset == null) hint?.unavailableReason ?: if (hint != null || ref == null && inferredPlatform == null) "需要关联音频文件" else null else null
     )
 }

@@ -140,7 +140,7 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
                         ConnectedMiniPlayer(coordinator, onClick = { showFullPlayer = true })
                     }
 
-                    NavigationBar {
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp) {
                         NavigationBarItem(
                             selected = activeRoute == Screen.Library.route,
                             onClick = {
@@ -207,7 +207,8 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
                         onNavigateToSettings = {
                             navController.navigate(Screen.Settings.route)
                         },
-                        onNavigateToSource = { navController.navigate(Screen.SourceManager.route) }
+                        onNavigateToSource = { navController.navigate(Screen.SourceManager.route) },
+                        onNavigateToSearch = { navController.navigate(Screen.Search.route) { launchSingleTop = true } }
                     )
                 }
 
@@ -226,6 +227,7 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
                         playbackCoordinator = coordinator,
                         downloadCoordinator = app.downloadCoordinator,
                         playlistRepository = app.playlistRepository,
+                        libraryRepository = app.libraryRepository,
                         sourceManager = app.sourceManager,
                         searchStateManager = searchStateManager,
                         onOpenPlayer = { showFullPlayer = true },

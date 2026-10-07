@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -59,6 +60,7 @@ fun PlayerScreen(
     val lyricSize by app.userPreferences.lyricFontSize.collectAsStateWithLifecycle(initialValue = 18)
     val translation by app.userPreferences.showLyricTranslation.collectAsStateWithLifecycle(initialValue = true)
     val defaultQuality by app.userPreferences.defaultOnlineQuality.collectAsStateWithLifecycle(initialValue = Quality.Q128K)
+    val libraryIds by app.libraryRepository.libraryTrackIds.collectAsStateWithLifecycle(initialValue = emptyList())
     var lyricsActive by remember { mutableStateOf(false) }
     androidx.activity.compose.BackHandler(enabled = lyricsActive) { lyricsActive = false }
     var showQueue by remember { mutableStateOf(false) }
@@ -86,6 +88,15 @@ fun PlayerScreen(
         }
     }
     fun importLyrics() { pendingLyricTrackId = track?.id; lrcPicker.launch(arrayOf("text/*", "application/octet-stream", "*/*")) }
+    fun addToLibrary(song: Track) {
+        scope.launch {
+            try {
+                val count = app.libraryRepository.addTracks(listOf(song))
+                snack.showSnackbar(if (count > 0) "已加入曲库" else "已在曲库中")
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { snack.showSnackbar(e.message ?: "加入曲库失败，请重试") }
+        }
+    }
     val relinkFile = rememberRelinkFileAction(app.libraryRepository,
         { scope.launch { snack.showSnackbar("文件已关联，可点击播放") } },
         { message -> scope.launch { snack.showSnackbar(message) } })
@@ -98,14 +109,18 @@ fun PlayerScreen(
         finally { lyricLoading = false }
     }
     val song = track ?: return
+    val inLibrary = song.id in libraryIds
     Scaffold(topBar = {
         TopAppBar(title = { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_001), style = MaterialTheme.typography.titleMedium) },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             navigationIcon = { IconButton(onClick = onCollapse) { Icon(Icons.Default.KeyboardArrowDown, stringResource(com.pickaudio.R.string.ui_playerscreen_018)) } },
             actions = {
                 IconButton(onClick = { showTimer = true }) { Icon(Icons.Default.Timer, stringResource(com.pickaudio.R.string.ui_playerscreen_019), tint = if (sleep != null || coordinator.stopAfterCurrentTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
                 Box {
                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, stringResource(com.pickaudio.R.string.ui_playerscreen_020)) }
                     DropdownMenu(menu, { menu = false }) {
+                        DropdownMenuItem(enabled = !inLibrary, text = { Text(if (inLibrary) "已在曲库" else "加入曲库") },
+                            onClick = { menu = false; addToLibrary(song) })
                         DropdownMenuItem(text = { Text(stringResource(com.pickaudio.R.string.action_add_playlist)) }, onClick = { menu = false; playlistTracks = listOf(song) })
                         if (song.platform != null) DropdownMenuItem(text = { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_002)) }, onClick = { menu = false; downloadTracks = listOf(song) })
                         DropdownMenuItem(text = { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_003)) }, onClick = { menu = false; showQuality = true })
@@ -122,11 +137,13 @@ fun PlayerScreen(
     }, snackbarHost = { SnackbarHost(snack) }, modifier = modifier.fillMaxSize()) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
             val compact = maxHeight < 620.dp || LocalDensity.current.fontScale > 1.3f
-            val mediaHeight = if (compact) 200.dp else (maxHeight - 310.dp).coerceIn(260.dp, 440.dp)
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(!lyricsActive, { lyricsActive = false }, label = { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_007)) })
-                    FilterChip(lyricsActive, { lyricsActive = true }, label = { Text(stringResource(com.pickaudio.R.string.lyrics_title)) })
+            val mediaHeight = if (compact) (maxHeight - 430.dp).coerceIn(120.dp, 180.dp) else (maxHeight - 460.dp).coerceIn(160.dp, 340.dp)
+            Column(Modifier.fillMaxSize().padding(horizontal = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+              Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+                TabRow(if (lyricsActive) 1 else 0, modifier = Modifier.widthIn(max = 220.dp).padding(bottom = 16.dp),
+                    containerColor = MaterialTheme.colorScheme.background) {
+                    Tab(!lyricsActive, { lyricsActive = false }, text = { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_007)) })
+                    Tab(lyricsActive, { lyricsActive = true }, text = { Text(stringResource(com.pickaudio.R.string.lyrics_title)) })
                 }
                 Box(Modifier.fillMaxWidth().height(mediaHeight).clip(RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) {
                     if (lyricsActive) {
@@ -162,22 +179,36 @@ fun PlayerScreen(
                     }
                     IconButton(onClick = { onToggleFavorite(song.id) }) { Icon(if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, if (isFavorite) "取消喜欢" else "加入我喜欢", tint = MaterialTheme.colorScheme.primary) }
                 }
-                Text(state.actualQuality ?: if (song.localUri != null) "本地播放" else state.requestedQuality?.let { "请求音质 · ${Quality.fromValue(it).label}" } ?: "在线音乐",
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(state.actualQuality ?: if (song.localUri != null) "本地播放" else state.requestedQuality?.let { "请求音质 · ${Quality.fromValue(it).label}" } ?: "在线音乐",
+                        modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick = { addToLibrary(song) }, enabled = !inLibrary) {
+                        Icon(if (inLibrary) Icons.Default.Check else Icons.Default.Add, null, Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp)); Text(if (inLibrary) "已在曲库" else "加入曲库")
+                    }
+                }
                 lyricData.warning?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                if (state.message != null && state.phase != PlaybackPhase.ERROR)
+                if (state.message != null && state.phase !in listOf(PlaybackPhase.ERROR, PlaybackPhase.CHOOSE_VERSION))
                     Text(state.message!!, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (state.phase in listOf(PlaybackPhase.RESOLVING, PlaybackPhase.BUFFERING)) {
                     LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
                     Text(state.phase.label, style = MaterialTheme.typography.bodySmall)
                 }
-                state.message?.let { Text(it, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), color = MaterialTheme.colorScheme.error) }
-                if (state.phase == PlaybackPhase.ERROR || state.phase == PlaybackPhase.CHOOSE_VERSION) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = coordinator::retryCurrent) { Text(stringResource(com.pickaudio.R.string.action_retry)) }
-                    TextButton(onClick = { showQuality = true }) { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_013)) }
-                    TextButton(onClick = onOpenSource) { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_014)) }
-                    if (song.platform == null) TextButton(onClick = { relinkFile(song, null) }) { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_015)) }
+                if (state.phase == PlaybackPhase.ERROR || state.phase == PlaybackPhase.CHOOSE_VERSION) Surface(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp), shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(state.message ?: state.phase.label, style = MaterialTheme.typography.bodyMedium,
+                            color = if (state.phase == PlaybackPhase.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = coordinator::retryCurrent) { Text(stringResource(com.pickaudio.R.string.action_retry)) }
+                            TextButton(onClick = onOpenSource) { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_014)) }
+                            if (song.platform == null) TextButton(onClick = { relinkFile(song, null) }) { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_015)) }
+                        }
+                    }
                 }
+              }
                 var dragPosition by remember(song.id) { mutableStateOf<Float?>(null) }
                 val progressLabel = stringResource(com.pickaudio.R.string.playback_progress)
                 Slider(value = dragPosition ?: if (duration > 0) (progress.toFloat() / duration).coerceIn(0f, 1f) else 0f,
@@ -196,13 +227,13 @@ fun PlayerScreen(
                     IconButton(onClick = coordinator::previous) { Icon(Icons.Default.SkipPrevious, stringResource(com.pickaudio.R.string.action_previous), modifier = Modifier.size(32.dp)) }
                     FilledIconButton(onClick = coordinator::playOrPause, modifier = Modifier.size(64.dp)) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, stringResource(if (playing) com.pickaudio.R.string.action_pause else com.pickaudio.R.string.action_play), modifier = Modifier.size(32.dp)) }
                     IconButton(onClick = coordinator::next) { Icon(Icons.Default.SkipNext, stringResource(com.pickaudio.R.string.action_next), modifier = Modifier.size(32.dp)) }
-                    IconButton(onClick = { showQueue = true }) { Icon(Icons.Default.QueueMusic, stringResource(com.pickaudio.R.string.playback_queue)) }
+                    IconButton(onClick = { showQueue = true }) { Icon(Icons.AutoMirrored.Filled.QueueMusic, stringResource(com.pickaudio.R.string.playback_queue)) }
                 }
                 Text(mode.displayName + (sleep?.let { " · ${formatMusicTime(it)} 后停止" } ?: if (coordinator.stopAfterCurrentTrack) " · 播完本首停止" else ""), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 16.dp))
             }
         }
     }
-    if (candidates.isNotEmpty()) VersionChoiceDialog(song, candidates, coordinator::confirmVersion, coordinator::dismissVersionCandidates)
+    if (candidates.isNotEmpty()) VersionChoiceDialog(song, candidates, coordinator::confirmVersion, coordinator::dismissVersionCandidates, state.message)
     if (showQueue) QueueBottomSheet(queue, index, coordinator::playQueueItemFromUi, coordinator::removeQueueItem, onClearQueue,
         { showQueue = false }, coordinator::moveQueueItem, coordinator::undoClearQueue, queueEntries.map { it.id })
     if (showTimer) SleepTimerDialog(sleep, coordinator.stopAfterCurrentTrack, coordinator::setSleepTimer, { coordinator.cancelSleepTimer(); coordinator.stopAfterCurrentTrack = true }, coordinator::cancelSleepTimer, { showTimer = false })

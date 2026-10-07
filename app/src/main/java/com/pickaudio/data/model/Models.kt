@@ -19,7 +19,8 @@ data class Track(
     val folderId: String = "",
     val repairReason: String? = null,
     val platformMetadataJson: String = "{}",
-    val audioInfo: AudioInfo? = null
+    val audioInfo: AudioInfo? = null,
+    val isInLibrary: Boolean = false
 )
 
 enum class PlaybackMode(val displayName: String) {

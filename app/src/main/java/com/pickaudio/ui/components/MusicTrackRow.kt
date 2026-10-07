@@ -28,7 +28,7 @@ import com.pickaudio.data.model.Track
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-data class TrackMenuAction(val label: String, val destructive: Boolean = false, val onClick: () -> Unit)
+data class TrackMenuAction(val label: String, val destructive: Boolean = false, val enabled: Boolean = true, val onClick: () -> Unit)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -36,7 +36,8 @@ fun MusicTrackRow(
     track: Track, isCurrent: Boolean = false, isPlaying: Boolean = false,
     selecting: Boolean = false, selected: Boolean = false, onClick: () -> Unit,
     onSelect: () -> Unit = {}, onFavorite: (() -> Unit)? = null,
-    actions: List<TrackMenuAction> = emptyList(), trailing: (@Composable () -> Unit)? = null
+    actions: List<TrackMenuAction> = emptyList(), trailing: (@Composable () -> Unit)? = null,
+    onAddToLibrary: (() -> Unit)? = null
 ) {
     var menu by remember(track.id) { mutableStateOf(false) }
     val rowState = stringResource(if (selecting) {
@@ -44,45 +45,50 @@ fun MusicTrackRow(
     } else if (isPlaying) com.pickaudio.R.string.playback_playing else com.pickaudio.R.string.playback_current_paused)
     val origin = if (track.localUri != null) { if (track.sourceType == "DOWNLOADED") "已下载" else "本地" }
         else track.platform?.let { Platform.fromId(it).displayName } ?: "待关联文件"
-    Surface(color = if (selected || isCurrent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f) else MaterialTheme.colorScheme.surface,
+    Surface(color = if (selected || isCurrent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f) else MaterialTheme.colorScheme.background,
         modifier = Modifier.fillMaxWidth().combinedClickable(
             onClick = { if (selecting) onSelect() else onClick() }, onLongClick = onSelect
         ).semantics {
             if (selecting) { this.selected = selected; stateDescription = rowState }
             else if (isCurrent) stateDescription = rowState
         }) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.Top) {
+        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.Top) {
             if (selecting) Checkbox(selected, { onSelect() })
             else Box(Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
                 if (!track.coverUri.isNullOrEmpty()) AsyncImage(track.coverUri, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                 else Icon(Icons.Default.MusicNote, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                    Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Medium, modifier = Modifier.weight(1f).padding(top = 6.dp))
-                    if (!selecting) {
-                        if (onFavorite != null) IconButton(onClick = onFavorite) {
-                            Icon(if (track.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                                contentDescription = if (track.isFavorite) "取消喜欢" else "加入我喜欢",
-                                tint = if (track.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        trailing?.invoke()
-                        if (actions.isNotEmpty()) Box {
-                            IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "${track.title}的更多操作") }
-                            DropdownMenu(menu, { menu = false }) {
-                                actions.forEach { action -> DropdownMenuItem(text = { Text(action.label, color = if (action.destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface) }, onClick = { menu = false; action.onClick() }) }
-                            }
-                        }
-                    }
-                }
+            Column(Modifier.weight(1f).padding(top = 2.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Medium)
                 Text("${track.artist} · ${track.album}", style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("$origin · ${formatMusicTime(track.durationMs)}${if (isCurrent) if (isPlaying) " · 正在播放" else " · 当前歌曲" else ""}",
                     style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis,
                     color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 track.repairReason?.let { Text(it, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+            }
+            if (!selecting) Row(verticalAlignment = Alignment.CenterVertically) {
+                if (onAddToLibrary != null) IconButton(onClick = onAddToLibrary, enabled = !track.isInLibrary) {
+                    Icon(if (track.isInLibrary) Icons.Default.LibraryAddCheck else Icons.Default.Add,
+                        contentDescription = if (track.isInLibrary) "已在曲库" else "加入曲库",
+                        tint = if (track.isInLibrary) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary)
+                }
+                if (onFavorite != null) IconButton(onClick = onFavorite) {
+                    Icon(if (track.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = if (track.isFavorite) "取消喜欢" else "加入我喜欢",
+                        tint = if (track.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                trailing?.invoke()
+                if (actions.isNotEmpty()) Box {
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "${track.title}的更多操作") }
+                    DropdownMenu(menu, { menu = false }) {
+                        actions.forEach { action -> DropdownMenuItem(enabled = action.enabled,
+                            text = { Text(action.label, color = if (action.destructive) MaterialTheme.colorScheme.error else if (action.enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant) },
+                            onClick = { menu = false; action.onClick() }) }
+                    }
+                }
             }
         }
     }

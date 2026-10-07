@@ -27,7 +27,7 @@ import kotlinx.coroutines.launch
         ImportRootEntity::class,
         RestoreSessionEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class PickAudioDatabase : RoomDatabase() {
@@ -97,6 +97,15 @@ abstract class PickAudioDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tracks ADD COLUMN isInLibrary INTEGER NOT NULL DEFAULT 0")
+                // Earlier releases had no explicit online library action. Keep imported files;
+                // queue, favorite and playlist records remain stored without appearing in the library.
+                db.execSQL("UPDATE tracks SET isInLibrary = 1 WHERE id IN (SELECT trackId FROM local_assets)")
+            }
+        }
+
         @Volatile
         private var INSTANCE: PickAudioDatabase? = null
 
@@ -106,7 +115,7 @@ abstract class PickAudioDatabase : RoomDatabase() {
                     context.applicationContext,
                     PickAudioDatabase::class.java,
                     "pickaudio.db"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).addCallback(object : Callback() {
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         super.onCreate(db)
                         // Insert system favorite playlist

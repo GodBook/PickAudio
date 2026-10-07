@@ -156,10 +156,10 @@ fun DownloadQualityDialog(
 }
 
 @Composable
-fun VersionChoiceDialog(original: Track?, candidates: List<SearchSongItem>, onConfirm: (SearchSongItem) -> Unit, onDismiss: () -> Unit) {
+fun VersionChoiceDialog(original: Track?, candidates: List<SearchSongItem>, onConfirm: (SearchSongItem) -> Unit, onDismiss: () -> Unit, message: String? = null) {
     AlertDialog(onDismissRequest = onDismiss, title = { Text(stringResource(com.pickaudio.R.string.ui_musicactions_009)) }, text = {
         Column {
-            Text(stringResource(com.pickaudio.R.string.ui_musicactions_010))
+            Text(message ?: stringResource(com.pickaudio.R.string.ui_musicactions_010), style = MaterialTheme.typography.bodyMedium)
             LazyColumn(Modifier.heightIn(max = 320.dp)) {
                 items(candidates, key = { "${it.platform}_${it.songId}" }) { item ->
                     val same = original != null && VersionMatcher.sameRecording(original.title, original.artist, original.durationMs, item)

@@ -32,7 +32,7 @@ class OptimizationNavigationTest {
     }
     @Test fun backCollapsesPlayerBeforeLeavingUnderlyingSelection() {
         val track = Track("optimization_navigation", "返回层级专项歌曲", "验证", "", 1000)
-        runBlocking { app.database.trackDao().insertOrUpdate(TrackEntity(track.id, track.title, track.artist, "", 1000, null)) }
+        runBlocking { app.database.trackDao().insertOrUpdate(TrackEntity(track.id, track.title, track.artist, "", 1000, null, isInLibrary = true)) }
         compose.waitUntil(5000) { compose.onAllNodesWithText(track.title).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("多选").performClick()
         compose.runOnIdle { app.playbackCoordinator.setQueueAndPlay(listOf(track)) }

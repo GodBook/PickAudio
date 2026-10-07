@@ -29,6 +29,7 @@ fun DownloadScreen(downloadCoordinator: DownloadCoordinator, onBack: () -> Unit,
     val context = LocalContext.current
     val app = context.applicationContext as PickAudioApplication
     val tasks by downloadCoordinator.getAllTasks().collectAsStateWithLifecycle(initialValue = emptyList())
+    val libraryIds by app.libraryRepository.libraryTrackIds.collectAsStateWithLifecycle(initialValue = emptyList())
     val wifiOnly by app.userPreferences.wifiOnlyDownload.collectAsStateWithLifecycle(initialValue = true)
     val candidates by downloadCoordinator.versionCandidates.collectAsStateWithLifecycle()
     var tab by remember { mutableIntStateOf(0) }
@@ -96,6 +97,11 @@ fun DownloadScreen(downloadCoordinator: DownloadCoordinator, onBack: () -> Unit,
                                 when (task.status) {
                                     "COMPLETED" -> {
                                         FilledTonalButton(onClick = { app.playbackCoordinator.addOrPlayTrack(track(task)) }) { Text(stringResource(com.pickaudio.R.string.action_play)) }
+                                        TextButton(enabled = task.trackId !in libraryIds, onClick = { scope.launch {
+                                            try { app.libraryRepository.addTracks(listOf(track(task))); message("已加入曲库") }
+                                            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                                            catch (e: Exception) { message(e.message ?: "加入曲库失败") }
+                                        } }) { Text(if (task.trackId in libraryIds) "已在曲库" else "加入曲库") }
                                         TextButton(onClick = {
                                             try {
                                                 val uri = Uri.parse(task.targetUri ?: error("文件地址缺失"))
