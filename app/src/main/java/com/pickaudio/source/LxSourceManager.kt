@@ -3,6 +3,7 @@ package com.pickaudio.source
 import android.content.Context
 import android.net.Network
 import android.util.Log
+import androidx.room.withTransaction
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -20,6 +21,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -55,8 +58,16 @@ class LxSourceManager(
     private val database: PickAudioDatabase,
     private val networkPolicy: NetworkPolicy = NetworkPolicy.Default
 ) : Closeable {
+    companion object {
+        const val BUILTIN_STELLARWAVE_ID = "builtin_stellarwave"
+        const val STELLARWAVE_ASSET = "sources/stellarwave-v3.2.0.js"
+        fun isBuiltinSource(sourceId: String) = sourceId in setOf("builtin_aggregate", BUILTIN_STELLARWAVE_ID)
+    }
+
     private val sourceDao = database.sourceDao()
     private val gson = Gson()
+    private val builtinMutex = Mutex()
+    private val stellarWaveCode by lazy { context.assets.open(STELLARWAVE_ASSET).bufferedReader(Charsets.UTF_8).use { it.readText() } }
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, e ->
         Log.e("LxSourceManager", "Source background operation failed", e)
     })
@@ -112,7 +123,7 @@ class LxSourceManager(
     suspend fun supportedQualities(platform: String): List<String> {
         ensureBuiltinSources()
         val selected = sourceDao.getSelectionForPlatform(platform)
-        val id = selected?.sourceId ?: if (selected == null) "builtin_aggregate" else return emptyList()
+        val id = selected?.sourceId ?: if (selected == null) BUILTIN_STELLARWAVE_ID else return emptyList()
         val source = sourceDao.getSourceById(id) ?: return emptyList()
         return if (source.isEnabled) capabilitiesForSource(source)[platform]?.qualities.orEmpty() else emptyList()
     }
@@ -161,7 +172,7 @@ class LxSourceManager(
             } else if (trimmed.startsWith("@description")) {
                 description = trimmed.removePrefix("@description").trim()
             } else if (trimmed.startsWith("@version")) {
-                version = trimmed.removePrefix("@version").trim()
+                version = trimmed.removePrefix("@version").trim().removePrefix("v")
             } else if (trimmed.startsWith("@author")) {
                 author = trimmed.removePrefix("@author").trim()
             } else if (trimmed.startsWith("@homepage")) {
@@ -231,6 +242,7 @@ class LxSourceManager(
     }
 
     suspend fun selectSourceForPlatform(platform: String, sourceId: String?) {
+        ensureBuiltinSources()
         if (sourceId != null) {
             val source = sourceDao.getSourceById(sourceId) ?: error("音源不存在")
             require(capabilitiesForSource(source).containsKey(platform)) { "该音源不支持此平台" }
@@ -239,6 +251,7 @@ class LxSourceManager(
     }
 
     suspend fun deleteSource(sourceId: String) {
+        require(!isBuiltinSource(sourceId)) { "内置音源不可删除，可为平台选择其他音源或停用" }
         val s = sourceDao.getSourceById(sourceId)
         if (s != null) {
             stopEngine(sourceId)
@@ -275,6 +288,7 @@ class LxSourceManager(
                         dispatchNetworkRequest(session, reqId, url, optionsJson)
                     }
                 })
+                engine.evaluate("globalThis.lx.currentScriptInfo = ${gson.toJson(mapOf("rawScript" to code))}; undefined;", "<script-info>")
                 engine.evaluate(code, "source.js")
                 use(engine, initialized.await())
             } finally {
@@ -335,11 +349,19 @@ class LxSourceManager(
                         headers.add(k, v.asString)
                     }
                     val req = Request.Builder().url(urlStr).headers(headers.build())
-                    val body = opt.get("body")?.takeUnless { it.isJsonNull }?.asString.orEmpty()
-                    require(body.toByteArray(Charsets.UTF_8).size <= 1024 * 1024) { "请求内容超过 1MB 限制" }
-                    req.method(method, if (method in setOf("POST", "PUT", "PATCH")) body.toRequestBody(
-                        (headers.get("Content-Type") ?: "application/json").toMediaTypeOrNull()) else null)
-                    session.client.withResponse(req.build()) { resp ->
+                    val form = opt.get("form")?.takeUnless { it.isJsonNull }?.asJsonObject
+                    val rawBody = opt.get("body")?.takeUnless { it.isJsonNull }
+                    val body = if (rawBody?.isJsonPrimitive == true) rawBody.asString else rawBody?.toString().orEmpty()
+                    val requestBody = if (form != null) {
+                        FormBody.Builder().apply { form.entrySet().forEach { (key, value) ->
+                            add(key, if (value.isJsonPrimitive) value.asString else value.toString())
+                        } }.build().also { req.header("Content-Type", "application/x-www-form-urlencoded") }
+                    } else body.toRequestBody((headers.get("Content-Type") ?: "application/json").toMediaTypeOrNull())
+                    require(requestBody.contentLength() <= 1024 * 1024) { "请求内容超过 1MB 限制" }
+                    req.method(method, if (method in setOf("POST", "PUT", "PATCH")) requestBody else null)
+                    val timeout = (opt.get("timeout")?.asLong ?: 10000L).coerceIn(1000L, 15000L)
+                    session.client.newBuilder().callTimeout(timeout, TimeUnit.MILLISECONDS)
+                        .readTimeout(timeout, TimeUnit.MILLISECONDS).build().withResponse(req.build()) { resp ->
                         JsonObject().apply {
                             addProperty("statusCode", resp.code)
                             addProperty("body", resp.body?.readLimitedText(8 * 1024 * 1024).orEmpty())
@@ -356,7 +378,7 @@ class LxSourceManager(
         }
     }
 
-    suspend fun ensureBuiltinSources() = withContext(Dispatchers.IO) {
+    suspend fun ensureBuiltinSources() = withContext(Dispatchers.IO) { builtinMutex.withLock {
         try {
             val builtinId = "builtin_aggregate"
             val existing = sourceDao.getSourceById(builtinId)
@@ -375,13 +397,30 @@ class LxSourceManager(
                 )
                 sourceDao.insertOrUpdate(entity)
             }
-            sourceDao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity("wy", builtinId))
-            sourceDao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity("tx", builtinId))
+            val code = stellarWaveCode
+            val hash = sha256(code)
+            val currentStellarWave = sourceDao.getSourceById(BUILTIN_STELLARWAVE_ID)
+            val stellarWave = if (currentStellarWave?.scriptHash != hash) {
+                val header = parseSourceHeader(code)
+                SourceScriptEntity(id = BUILTIN_STELLARWAVE_ID, name = header.name, version = header.version,
+                    author = header.author, description = header.description, homepage = header.homepage,
+                    scriptHash = hash, scriptContent = code, capabilitiesJson = gson.toJson(testInitialize(code)),
+                    isEnabled = currentStellarWave?.isEnabled ?: true,
+                    createdAt = currentStellarWave?.createdAt ?: System.currentTimeMillis())
+            } else requireNotNull(currentStellarWave)
+            database.withTransaction {
+                val firstInstall = sourceDao.getSourceById(BUILTIN_STELLARWAVE_ID) == null
+                if (currentStellarWave?.scriptHash != hash) sourceDao.insertOrUpdate(stellarWave)
+                listOf("wy", "tx").forEach { platform ->
+                    if (firstInstall) sourceDao.replacePlatformSelection(platform, builtinId, BUILTIN_STELLARWAVE_ID)
+                    sourceDao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity(platform, BUILTIN_STELLARWAVE_ID))
+                }
+            }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             Log.e("LxSourceManager", "ensureBuiltinSources error", e)
         }
-    }
+    } }
 
     suspend fun resolveMusicUrl(
         platform: String, songId: String, quality: String = "128k", title: String? = null,
@@ -395,8 +434,9 @@ class LxSourceManager(
     ): MusicResource = withContext(Dispatchers.IO) {
         try {
             withTimeout(15000) {
+                ensureBuiltinSources()
                 val selection = sourceDao.getSelectionForPlatform(platform)
-                val sourceId = selection?.sourceId
+                val sourceId = selection?.sourceId ?: if (selection == null) BUILTIN_STELLARWAVE_ID else null
                 if (selection != null && sourceId == null) error("未配置音乐源，请选择支持此平台的音源后重试")
                 val supported = supportedQualities(platform)
                 require(quality in supported) { "当前音源不支持所选音质，请选择：${supported.joinToString()}" }

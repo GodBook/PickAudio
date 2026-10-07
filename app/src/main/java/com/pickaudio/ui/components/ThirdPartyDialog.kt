@@ -18,7 +18,7 @@ fun ThirdPartyDialog(onDismiss: () -> Unit) {
     var text by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         text = withContext(Dispatchers.IO) {
-            listOf("NOTICE.md", "DEPENDENCIES.txt", "QuickJS-MIT.txt", "Apache-2.0.txt", "UPSTREAM-NOTICES.txt")
+            listOf("NOTICE.md", "DEPENDENCIES.txt", "QuickJS-MIT.txt", "StellarWave-MIT.txt", "Apache-2.0.txt", "UPSTREAM-NOTICES.txt")
                 .joinToString("\n\n") { name -> context.assets.open("third-party/$name").bufferedReader().use { it.readText() } }
         }
     }

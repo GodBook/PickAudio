@@ -1,6 +1,6 @@
 # 构建、回归与发布基线
 
-应用ID为com.pickaudio，当前正式版本1.3.2/code 12。version.properties 为源码构建版本的唯一入口；根目录 version.json 描述已公开发布的APK，不随本地构建覆盖，在正式Release可下载后同步。
+应用ID为com.pickaudio，当前源码版本1.4.0/code 13。version.properties 为源码构建版本的唯一入口；根目录 version.json 描述已公开发布的APK，不随本地构建覆盖，在正式Release可下载后同步。
 
 ## 环境和常规检查
 
@@ -58,10 +58,10 @@ adb -s emulator-5560 shell am start -W -n com.pickaudio/.MainActivity --ez open_
 
 ## 发布检查
 
-Release默认为未签名构建。用户已授权本次GitHub与Release更新，沿用原项目证书签名；本次从1.3.1/code 11提升至1.3.2/code 12。先完成本地覆盖安装与数据保留验证，再检查远端CI并发布；实体蓝牙、TalkBack和实体升级记录按实际验证范围记录。
+Release默认为未签名构建。沿用原项目证书签名；本次从1.3.2/code 12提升至1.4.0/code 13。先完成本地覆盖安装与数据保留验证，再检查远端CI并发布；实体蓝牙、TalkBack和实体升级记录按实际验证范围记录。
 
 ```powershell
-./scripts/verify-release.ps1 -ApkPath <signed-apk> -PreviousVersionCode 11 -ExpectedCertificateSha256 <original-certificate-sha256> -SdkPath D:/dev/android-sdk -ChangelogPath <release-notes> -OutputDirectory app/build/release-candidate
+./scripts/verify-release.ps1 -ApkPath <signed-apk> -PreviousVersionCode 12 -ExpectedCertificateSha256 <original-certificate-sha256> -SdkPath D:/dev/android-sdk -ChangelogPath <release-notes> -OutputDirectory app/build/release-candidate
 ```
 
 脚本核对包名、源码版本、单调版本号、正式证书、签名有效性、双ABI、ELF PT_LOAD和APK ZIP的16KiB对齐，输出实际大小、SHA-256与元数据。输出目录限定在app/build，根目录历史version.json不受影响。仅检查本地未签名包时可使用-AllowUnsigned并指定真实较低的PreviousVersionCode；结果明确为publishable=false。

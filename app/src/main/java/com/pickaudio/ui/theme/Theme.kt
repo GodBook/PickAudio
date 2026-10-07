@@ -1,15 +1,16 @@
 package com.pickaudio.ui.theme
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.pickaudio.data.model.ThemeMode
+import com.pickaudio.data.model.ThemeColor
 
 private val DarkColorScheme = darkColorScheme(
     primary = AccentBlue,
@@ -62,6 +63,34 @@ private val LightColorScheme = lightColorScheme(
     onSurfaceVariant = LightOnSurfaceVariant
 )
 
+fun pickAudioColorScheme(themeColor: ThemeColor, darkTheme: Boolean): ColorScheme {
+    val palette = themeColor.palette()
+    val base = if (darkTheme) DarkColorScheme else LightColorScheme
+    val primary = if (darkTheme) palette.darkPrimary else palette.lightPrimary
+    val container = if (darkTheme) palette.darkContainer else palette.lightContainer
+    val onPrimary = if (darkTheme) palette.onDarkPrimary else Color.White
+    val onContainer = if (darkTheme) palette.darkPrimary else palette.onLightContainer
+    fun tint(color: Color) = if (themeColor == ThemeColor.BLUE) color else
+        lerp(color, primary, if (darkTheme) 0.04f else 0.025f)
+    return base.copy(
+        primary = primary, onPrimary = onPrimary,
+        primaryContainer = container, onPrimaryContainer = onContainer,
+        secondary = primary, onSecondary = onPrimary,
+        secondaryContainer = container, onSecondaryContainer = onContainer,
+        tertiary = primary, onTertiary = onPrimary,
+        tertiaryContainer = container, onTertiaryContainer = onContainer,
+        inversePrimary = if (darkTheme) palette.lightPrimary else palette.darkPrimary,
+        surfaceTint = primary,
+        background = tint(base.background), surface = tint(base.surface),
+        surfaceVariant = tint(base.surfaceVariant),
+        surfaceContainerLowest = tint(base.surfaceContainerLowest),
+        surfaceContainerLow = tint(base.surfaceContainerLow),
+        surfaceContainer = tint(base.surfaceContainer),
+        surfaceContainerHigh = tint(base.surfaceContainerHigh),
+        surfaceContainerHighest = tint(base.surfaceContainerHighest)
+    )
+}
+
 private val MusicTypography = Typography(
     titleLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 24.sp, lineHeight = 32.sp),
     titleMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 26.sp),
@@ -77,6 +106,7 @@ private val MusicTypography = Typography(
 @Composable
 fun PickAudioTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
+    themeColor: ThemeColor = ThemeColor.BLUE,
     content: @Composable () -> Unit
 ) {
     val darkTheme = when (themeMode) {
@@ -94,10 +124,7 @@ fun PickAudioTheme(
             }
         }
     }
-    val colorScheme = when {
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
+    val colorScheme = pickAudioColorScheme(themeColor, darkTheme)
 
     MaterialTheme(
         colorScheme = colorScheme,

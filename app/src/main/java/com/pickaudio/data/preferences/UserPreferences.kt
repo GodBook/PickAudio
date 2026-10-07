@@ -7,6 +7,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.pickaudio.data.model.Quality
 import com.pickaudio.data.model.ThemeMode
+import com.pickaudio.data.model.ThemeColor
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
@@ -18,6 +19,7 @@ class UserPreferences(private val context: Context) {
 
     companion object {
         val KEY_THEME = stringPreferencesKey("theme_mode")
+        val KEY_THEME_COLOR = stringPreferencesKey("theme_color")
         val KEY_FILTER_SHORT_AUDIO = booleanPreferencesKey("filter_short_audio")
         val KEY_DEFAULT_ONLINE_QUALITY = stringPreferencesKey("default_online_quality")
         val KEY_DEFAULT_DOWNLOAD_QUALITY = stringPreferencesKey("default_download_quality")
@@ -37,6 +39,14 @@ class UserPreferences(private val context: Context) {
 
     suspend fun setThemeMode(mode: ThemeMode) {
         context.dataStore.edit { it[KEY_THEME] = mode.name }
+    }
+
+    val themeColor: Flow<ThemeColor> = context.dataStore.data.map { prefs ->
+        ThemeColor.fromName(prefs[KEY_THEME_COLOR])
+    }
+
+    suspend fun setThemeColor(color: ThemeColor) {
+        context.dataStore.edit { it[KEY_THEME_COLOR] = color.name }
     }
 
     val filterShortAudio: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -92,6 +102,7 @@ class UserPreferences(private val context: Context) {
     suspend fun exportSettings(): Map<String, String> = context.dataStore.data.map { prefs ->
         mapOf(
             "theme" to (prefs[KEY_THEME] ?: ThemeMode.SYSTEM.name),
+            "themeColor" to ThemeColor.fromName(prefs[KEY_THEME_COLOR]).name,
             "filterShortAudio" to (prefs[KEY_FILTER_SHORT_AUDIO] ?: true).toString(),
             "onlineQuality" to (prefs[KEY_DEFAULT_ONLINE_QUALITY] ?: "128k"),
             "downloadQuality" to (prefs[KEY_DEFAULT_DOWNLOAD_QUALITY] ?: "320k"),
@@ -106,6 +117,7 @@ class UserPreferences(private val context: Context) {
         context.dataStore.edit { prefs ->
             if (restoreSessionId != null && prefs[KEY_RESTORE_SESSION] == restoreSessionId) return@edit
             values["theme"]?.takeIf { name -> ThemeMode.entries.any { it.name == name } }?.let { prefs[KEY_THEME] = it }
+            values["themeColor"]?.takeIf { name -> ThemeColor.entries.any { it.name == name } }?.let { prefs[KEY_THEME_COLOR] = it }
             values["filterShortAudio"]?.toBooleanStrictOrNull()?.let { prefs[KEY_FILTER_SHORT_AUDIO] = it }
             values["onlineQuality"]?.takeIf { value -> Quality.entries.any { it.value == value } }?.let { prefs[KEY_DEFAULT_ONLINE_QUALITY] = it }
             values["downloadQuality"]?.takeIf { value -> Quality.entries.any { it.value == value } }?.let { prefs[KEY_DEFAULT_DOWNLOAD_QUALITY] = it }

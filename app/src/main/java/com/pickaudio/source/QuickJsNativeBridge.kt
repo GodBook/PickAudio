@@ -6,6 +6,8 @@ interface QuickJsHostCallback {
     fun onLxRequest(reqId: Long, url: String, optionsJson: String)
     fun md5(value: ByteArray): String = java.security.MessageDigest.getInstance("MD5")
         .digest(value).joinToString("") { "%02x".format(it) }
+    fun aesEncrypt(data: ByteArray, mode: String, key: ByteArray, iv: ByteArray): ByteArray =
+        LxCrypto.aesEncrypt(data, mode, key, iv)
 }
 
 object QuickJsNativeBridge {

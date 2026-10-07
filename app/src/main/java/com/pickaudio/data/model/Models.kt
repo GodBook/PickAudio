@@ -87,6 +87,19 @@ enum class ThemeMode(val label: String) {
     DARK("深色")
 }
 
+enum class ThemeColor(val label: String) {
+    BLUE("雾蓝"),
+    GREEN("松绿"),
+    PURPLE("鸢紫"),
+    ROSE("玫瑰"),
+    AMBER("琥珀"),
+    TEAL("青碧");
+
+    companion object {
+        fun fromName(name: String?): ThemeColor = entries.find { it.name == name } ?: BLUE
+    }
+}
+
 enum class PlaybackPhase(val label: String) {
     IDLE("未播放"), RESOLVING("正在获取播放地址"), BUFFERING("正在缓冲"),
     READY("已就绪"), PLAYING("正在播放"), PAUSED("已暂停"), ERROR("播放失败"),
