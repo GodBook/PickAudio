@@ -1,6 +1,6 @@
-# v1.3.2 本地修复记录
+# v1.3.2 修复与发布记录
 
-源码版本：1.3.2 / code 12。此次变更尚未发布到 GitHub Release。
+源码与正式版本：1.3.2 / code 12。已于 2026-10-07 发布 [GitHub Release](https://github.com/GodBook/PickAudio/releases/tag/v1.3.2)，源码提交为 `3e1e45f21f1b94402706f113f30250fd63895822`。
 
 曲库现在使用独立的加入标记。试听、播放队列、我喜欢、歌单和下载记录仍可保存和恢复，但不会自动出现在曲库。搜索结果旁的 ＋、歌曲菜单、播放器及下载完成页提供“加入曲库”。手机音频通过用户主动扫描或导入加入曲库。普通“移出曲库”保留歌单、喜欢和队列。
 
@@ -18,6 +18,12 @@ QQ 官方接口在本次网络实测中对匿名请求返回 `104009`，未提�
 - 覆盖试听/队列/喜欢/歌单/下载不自动入库、明确加入与移出、原曲身份复用、备份恢复、真实 v4→v5 schema 迁移、QQ/LX 字段和实际 Media3 音频解码，以及小屏、大字号、长错误提示下的播放控件。
 - Debug、测试 APK、R8 Release 构建及 Room schema 2–5 检查通过。Lint 为 0 错误 / 64 警告。双 ABI 原生库与 APK 的 16 KiB 对齐检查通过。
 - 实际 R8 安装包冷启动恢复重复队列、播放/暂停、明确加入曲库和在线搜索界面已复核；加入一首后，下一首的播放记录没有自动进入曲库。测试音频夹具随后清理。
-- 本地预览包 `app/build/bugfix-qa/PickAudio-v1.3.2-preview.apk` 为实际 Release 代码的调试签名副本，DEX 与未签名 Release 一致，约 7.81 MiB。调试签名不能直接覆盖原签名正式版；未读取正式签名私钥或发布远端版本。
+- 开发期间的本地预览包 `app/build/bugfix-qa/PickAudio-v1.3.2-preview.apk` 为实际 Release 代码的调试签名副本，DEX 与未签名 Release 一致，约 7.81 MiB。调试签名不能直接覆盖原签名正式版；公开下载的是下方的原签名正式包。
+- 正式源码的 [GitHub CI](https://github.com/GodBook/PickAudio/actions/runs/37573309207) 已通过，包含构建、单测、Lint、schema 检查及 API 36 Debug/裁剪验证变体各 59 项设备测试。
+- 在专用 `PickAudio_Optimization_API36` / `emulator-5560` 上验证原签名 v1.3.1/code 11→v1.3.2/code 12 覆盖安装：UID、偏好文件、歌曲/歌单/喜欢/歌词与校准、重复队列及 5 秒暂停进度、自定义音源与明确禁用的平台状态均保留。本地音频和 1024 字节的暂停下载文件未改变；数据库 v5 完整性正常、外键检查无错误。本地歌曲仍在曲库，在线试听及仅喜欢的歌曲不自动入库。自有夹具已清理，原音源绑定与播放快照已恢复，专用模拟器已停止。
 
 预览包 SHA-256：`cd7b1383b768606caa0a376220b720991fe3a802264fc66cddf3cffdd6bfd866`。
+
+正式包：[`PickAudio-v1.3.2-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.3.2/PickAudio-v1.3.2-release.apk)，大小 8,189,047 字节（约 7.81 MiB）。正式包已从公开 Release 完整回下载，大小与 SHA-256 均匹配本地已验收安装包和 GitHub 资产摘要；APK 内的源码标识指向上述提交。
+
+正式包 SHA-256：`ac219f587f4fd7926f465625996d71d12a8e7d2ac5bebfb57d9781be75cfae9a`。原签名证书与安装包明细见 [更新说明](RELEASE-1.3.2.md)，本地覆盖升级证据在 `app/build/release-1.3.2/official-upgrade-verification.json`。

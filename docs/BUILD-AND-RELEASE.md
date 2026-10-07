@@ -1,6 +1,6 @@
 # 构建、回归与发布基线
 
-应用ID为com.pickaudio，当前正式版本1.3.1/code 11。version.properties 为源码构建版本的唯一入口；根目录 version.json 描述已公开发布的APK，不随本地构建覆盖，在正式Release可下载后同步。
+应用ID为com.pickaudio，当前正式版本1.3.2/code 12。version.properties 为源码构建版本的唯一入口；根目录 version.json 描述已公开发布的APK，不随本地构建覆盖，在正式Release可下载后同步。
 
 ## 环境和常规检查
 
@@ -14,7 +14,7 @@ $env:JAVA_HOME = 'D:/dev/jdk-17'
 ./scripts/verify-schemas.ps1
 ```
 
-Room导出schema位于app/schemas；v2为已发布版本的真实历史结构，v3/v4为本轮演进。禁止用删库代替迁移。MigrationTestHelper使用这些文件核验v2→v4并保留队列条目、收藏时间和关联；旧v1测试仍属于结构模拟，不宣称覆盖历史正式签名安装升级。
+Room导出schema位于app/schemas；v2为已发布版本的真实历史结构，v3/v4/v5为后续演进。禁止用删库代替迁移。MigrationTestHelper使用这些文件核验v2→v5及真实v4→v5迁移，保留队列条目、收藏时间和关联，并核对本地音频与在线试听记录的曲库归属；旧v1测试仍属于结构模拟，不宣称覆盖历史正式签名安装升级。
 
 Windows下让各变体生成代码完成后再单独运行Lint，避免KSP正在更新Release的Java输出时，Lint并行读取该路径发生FileNotFoundException。此处保留测试源码Lint，未屏蔽检测器。
 
@@ -58,15 +58,15 @@ adb -s emulator-5560 shell am start -W -n com.pickaudio/.MainActivity --ez open_
 
 ## 发布检查
 
-Release默认为未签名构建。用户已授权本次GitHub与Release更新，沿用原项目证书签名；版本从1.2.0/code 9提升至1.3.0/code 10。先完成本地覆盖安装与数据保留验证，再检查远端CI并发布；实体蓝牙、TalkBack和实体升级记录按实际验证范围记录。
+Release默认为未签名构建。用户已授权本次GitHub与Release更新，沿用原项目证书签名；本次从1.3.1/code 11提升至1.3.2/code 12。先完成本地覆盖安装与数据保留验证，再检查远端CI并发布；实体蓝牙、TalkBack和实体升级记录按实际验证范围记录。
 
 ```powershell
-./scripts/verify-release.ps1 -ApkPath <signed-apk> -PreviousVersionCode 9 -ExpectedCertificateSha256 <original-certificate-sha256> -SdkPath D:/dev/android-sdk -ChangelogPath <release-notes> -OutputDirectory app/build/release-candidate
+./scripts/verify-release.ps1 -ApkPath <signed-apk> -PreviousVersionCode 11 -ExpectedCertificateSha256 <original-certificate-sha256> -SdkPath D:/dev/android-sdk -ChangelogPath <release-notes> -OutputDirectory app/build/release-candidate
 ```
 
 脚本核对包名、源码版本、单调版本号、正式证书、签名有效性、双ABI、ELF PT_LOAD和APK ZIP的16KiB对齐，输出实际大小、SHA-256与元数据。输出目录限定在app/build，根目录历史version.json不受影响。仅检查本地未签名包时可使用-AllowUnsigned并指定真实较低的PreviousVersionCode；结果明确为publishable=false。
 
-GitHub工作流执行单测、Lint、Debug/Release构建、schema核查以及API36 Debug/裁剪设备回归；v1.3.1的[完整远端CI](https://github.com/GodBook/PickAudio/actions/runs/37507715988)已通过，单测61项、两组设备测试各52项，均无失败或跳过。构建许可材料与准确依赖列表打包进APK。升级依赖时成组更新锁定和校验信息，复查源授权、JNI和音频流程。
+GitHub工作流执行单测、Lint、Debug/Release构建、schema核查以及API36 Debug/裁剪设备回归；v1.3.2的[完整远端CI](https://github.com/GodBook/PickAudio/actions/runs/37573309207)已通过，两组设备测试各59项。本地65项JVM测试与59项设备测试均无失败或跳过；原签名覆盖升级保留设置、歌单、喜欢、重复队列、播放进度及暂停下载，正式资产回下载摘要一致，见[修复与发布记录](BUGFIX-1.3.2.md)。构建许可材料与准确依赖列表打包进APK。升级依赖时成组更新锁定和校验信息，复查源授权、JNI和音频流程。
 
 托管CI明确安装SDK36/build-tools35/NDK28.2/CMake3.22.1，避免setup-android默认请求已下线的tools包。CI=true时从Google、Maven Central和Gradle Plugin Portal解析依赖；本地环境继续使用既有镜像配置。依赖锁定与摘要校验保持开启。
 

@@ -2,15 +2,15 @@
 
 Android 本地与在线音乐播放器，使用 Kotlin、Jetpack Compose、Room、Media3 和内嵌 QuickJS。无账号设计，歌单、收藏和设置在设备上保存。
 
-当前源码为 v1.3.2/code 12，修复试听自动进入曲库、QQ 音源参数兼容及界面布局，见 [本地修复记录](docs/BUGFIX-1.3.2.md)。QQ 原曲可用性仍受平台授权与所配置音乐源影响。
+当前正式版与源码为 v1.3.2/code 12，修复试听自动进入曲库、QQ 音源参数兼容及界面布局，见 [更新说明](docs/RELEASE-1.3.2.md) 和 [修复与发布记录](docs/BUGFIX-1.3.2.md)。QQ 原曲可用性仍受平台授权与所配置音乐源影响。
 
-当前正式版为 v1.3.1，源绑定修复见 [补丁说明](docs/RELEASE-1.3.1.md)，完整优化内容见 [v1.3.0 更新说明](docs/RELEASE-1.3.0.md)。v1.2.0 的体验优化与验收历史见 [体验升级记录](docs/UX-UPGRADE.md)，v1.0 的详细设计文档保留为历史设计参考。
+此前的源绑定修复见 [v1.3.1 补丁说明](docs/RELEASE-1.3.1.md)，完整优化内容见 [v1.3.0 更新说明](docs/RELEASE-1.3.0.md)。v1.2.0 的体验优化与验收历史见 [体验升级记录](docs/UX-UPGRADE.md)，v1.0 的详细设计文档保留为历史设计参考。
 
 本轮优化需求与审查基线见 [项目优化审查文档](docs/OPTIMIZATION-REVIEW-2026-10-06.md)，包含可靠性、性能、体验与工程维护的优先级、代码依据、方案取舍和验收条件。
 
 优化计划的当前任务、检查点和验证结果见 [优化执行记录](docs/OPTIMIZATION-EXECUTION.md)。
 
-v1.3.1/code 11已完成O01–O24及默认音源初始化竞态修复：61项JVM测试、Debug/裁剪验证变体各52项设备测试通过，实际Release代码的冷恢复、后台自然切歌和通知入口已复验。原签名正式包为7.78MiB，比v1.2.0减小85.01%，正式签名覆盖升级的数据保留验证已通过。环境、隔离设备回归、裁剪包和发布检查见[构建与发布基线](docs/BUILD-AND-RELEASE.md)。
+v1.3.2 延续 O01–O24 及默认音源初始化竞态修复。本地 65 项 JVM 测试通过，GitHub 的 Debug/裁剪验证变体各 59 项设备测试及构建、Lint、schema 检查全部通过；实际 Release 代码的冷恢复、播放/暂停和明确入库已复验。原签名正式包约 7.81 MiB，v1.3.1→v1.3.2 覆盖升级的数据保留验证已通过。环境、隔离设备回归、裁剪包和发布检查见 [构建与发布基线](docs/BUILD-AND-RELEASE.md)。
 
 ## 主要功能
 
@@ -45,6 +45,8 @@ v1.2.0 将 Room 数据库从 v1 迁移至 v2，保留已有歌曲、成员、收
 
 v1.3.0提供v2→v3→v4迁移，增加独立收藏排序、队列条目和可恢复操作字段，以及真实音频信息和文件身份；备份v3兼容v1/v2格式，恢复中断后可继续。待修复文件从曲库持久状态读取，候选关联须人工核对。
 
+v1.3.2 提供 v4→v5 迁移，独立保存曲库归属。旧的纯在线试听记录从曲库视图隐藏，本地音频保留；歌曲记录、歌单、喜欢、队列与下载仍保存。备份同时保存曲库标记，恢复不会把试听记录重新加入曲库。
+
 ## 运行和验证
 
 要求 Android 16（API 36）；支持 arm64-v8a 和 x86_64，原生库按 16KB 对齐。开发环境使用 JDK 17、API 36 SDK、NDK 28.2.13676358 和 CMake 3.22.1。
@@ -62,7 +64,7 @@ Debug APK：`app/build/outputs/apk/debug/app-debug.apk`。Release 构建默认�
 
 Release已开启R8与资源裁剪。构建版本统一读取version.properties；依赖锁定和SHA-256校验随本轮验收生成。第三方来源与完整许可证见[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，构建同时将准确依赖清单和原始notice放入APK，设置页可离线查看。
 
-正式安装包：[`PickAudio-v1.3.1-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.3.1/PickAudio-v1.3.1-release.apk)，沿用原项目签名，大小约 7.78 MiB，可覆盖旧正式版。更新说明和安装包校验信息见 [v1.3.1 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.3.1)，构建与数据保留验收结果见 [优化执行记录](docs/OPTIMIZATION-EXECUTION.md)。
+正式安装包：[`PickAudio-v1.3.2-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.3.2/PickAudio-v1.3.2-release.apk)，沿用原项目签名，大小约 7.81 MiB，可覆盖旧正式版。更新说明和安装包校验信息见 [v1.3.2 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.3.2)，构建与数据保留验收结果见 [修复与发布记录](docs/BUGFIX-1.3.2.md)。
 
 ## 仓库
 

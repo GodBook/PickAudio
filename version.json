@@ -1,10 +1,10 @@
 {
-  "versionCode": 11,
-  "versionName": "1.3.1",
-  "changelog": "1. 修复默认音乐源初始化偶尔覆盖自定义选择的问题，保留明确禁用的平台状态。\n2. 沿用1.3.0的后台播放、队列、下载、备份、搜索与歌词可靠性优化。\n3. 原签名安装包约7.78 MiB，可覆盖旧正式版，保留已有记录和设置。",
-  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.3.1/PickAudio-v1.3.1-release.apk",
-  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.3.1",
-  "apkSize": 8156279,
-  "sha256": "a66659446b049c7d5018ee38ea5c2d8213ccfd47844b3565313cc13d49b9ca8d",
+  "versionCode": 12,
+  "versionName": "1.3.2",
+  "changelog": "1. 试听、喜欢、歌单、队列和下载不再自动进入曲库，明确点击加入或主动导入才入库。\n2. 修复 QQ/LX 歌曲标识与音质参数兼容；QQ 原曲播放仍取决于平台授权或所配音源。\n3. 整理曲库、搜索和歌曲行布局，播放器进度与控制固定在底部。\n4. 原签名安装包约7.81 MiB，已验证覆盖1.3.1并保留设置、歌单、喜欢、队列、播放进度及暂停下载。",
+  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.3.2/PickAudio-v1.3.2-release.apk",
+  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.3.2",
+  "apkSize": 8189047,
+  "sha256": "ac219f587f4fd7926f465625996d71d12a8e7d2ac5bebfb57d9781be75cfae9a",
   "publishTime": "2026-10-07"
 }
