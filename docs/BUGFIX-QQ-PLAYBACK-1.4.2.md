@@ -38,3 +38,5 @@
 包名 `com.pickaudio`，原证书 SHA-256 为 `1e564b554f48b6a69d80e6d76c704e8b16e9a600d2511205754839c729d4a281`。版本、单调版本号、签名、arm64-v8a/x86_64 双 ABI、ZIP 与 ELF 16 KiB 对齐检查通过。
 
 安装包为 `PickAudio-v1.4.2-release.apk`，8,226,077 字节（约 7.85 MiB），SHA-256 为 `e88aac535edbf9bd8cf8b497916b96b818d09942ade6271ce4593aad28eb5a4c`。
+
+代码通过 [PR #2](https://github.com/GodBook/PickAudio/pull/2) 合入 main，[v1.4.2 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.4.2) 已公开发布，含原签名 APK、SHA256SUMS.txt 和版本元数据。正式资产回下载与本地签名 APK 的大小、SHA-256 及 Release 版本元数据一致。

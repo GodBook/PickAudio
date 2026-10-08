@@ -4,7 +4,9 @@ Android 本地与在线音乐播放器，使用 Kotlin、Jetpack Compose、Room�
 
 当前源码为 v1.4.2/code 15，修正内置星澜 QQ 官方线路的歌曲与媒体文件编号使用，改善解析失败后的错误展示、服务退出和重试状态，见 [更新说明](docs/RELEASE-1.4.2.md)及 [验证记录](docs/BUGFIX-QQ-PLAYBACK-1.4.2.md)。包含 v1.4.1 的 Android 16 播放稳定性修复、内置星澜聚合音源 v3.2.0 和六种可保存的主题配色。歌曲可用性仍受平台授权与音源后端影响。
 
-2026-10-08 播放稳定性修复增加限次原进度续播。71 项单测、8 项 API 36 播放回归及完整服务时限专项复验通过，见 [修复与验证记录](docs/BUGFIX-ANDROID16-PLAYBACK.md)。
+v1.4.2 的 71 项 JVM 单测、14 项本地专项，以及 GitHub Debug／裁剪验证变体各 79 项 API 36 设备测试全部通过。原签名 1.4.1→1.4.2 覆盖升级保留设置、歌单、收藏、队列、进度及暂停下载，实际生产包的后台播放与自然切歌已复验，见 [QQ 修复与验证记录](docs/BUGFIX-QQ-PLAYBACK-1.4.2.md)。
+
+v1.4.1 的播放稳定性修复增加限次原进度续播，原验证记录见 [Android 16 播放修复](docs/BUGFIX-ANDROID16-PLAYBACK.md)。
 
 此前的源绑定修复见 [v1.3.1 补丁说明](docs/RELEASE-1.3.1.md)，完整优化内容见 [v1.3.0 更新说明](docs/RELEASE-1.3.0.md)。v1.2.0 的体验优化与验收历史见 [体验升级记录](docs/UX-UPGRADE.md)，v1.0 的详细设计文档保留为历史设计参考。
 
@@ -69,7 +71,7 @@ Debug APK：`app/build/outputs/apk/debug/app-debug.apk`。Release 构建默认�
 
 Release已开启R8与资源裁剪。构建版本统一读取version.properties；依赖锁定和SHA-256校验随本轮验收生成。第三方来源与完整许可证见[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，构建同时将准确依赖清单和原始notice放入APK，设置页可离线查看。
 
-正式安装包：[`PickAudio-v1.4.1-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.4.1/PickAudio-v1.4.1-release.apk)，沿用原项目签名，大小约 7.85 MiB，可覆盖旧正式版。更新说明和安装包校验信息见 [v1.4.1 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.4.1)，构建、播放回归及覆盖升级数据保留结果见 [修复与发布记录](docs/BUGFIX-ANDROID16-PLAYBACK.md)。
+正式安装包：[`PickAudio-v1.4.2-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.4.2/PickAudio-v1.4.2-release.apk)，沿用原项目签名，大小约 7.85 MiB，可覆盖旧正式版。更新说明和安装包校验信息见 [v1.4.2 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.4.2)，构建、播放回归及覆盖升级数据保留结果见 [修复与发布记录](docs/BUGFIX-QQ-PLAYBACK-1.4.2.md)。
 
 ## 仓库
 
