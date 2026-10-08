@@ -32,7 +32,7 @@ import com.pickaudio.playback.PlaybackCoordinator
 @Composable
 fun ConnectedMiniPlayer(coordinator: PlaybackCoordinator, onClick: () -> Unit) {
     val track by coordinator.currentTrack.collectAsStateWithLifecycle()
-    val playing by coordinator.isPlaying.collectAsStateWithLifecycle()
+    val playing by coordinator.playRequested.collectAsStateWithLifecycle()
     val progress by coordinator.currentPositionMs.collectAsStateWithLifecycle()
     val duration by coordinator.durationMs.collectAsStateWithLifecycle()
     val state by coordinator.uiState.collectAsStateWithLifecycle()

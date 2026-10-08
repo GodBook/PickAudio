@@ -5,6 +5,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -15,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -25,6 +29,7 @@ import com.pickaudio.data.model.*
 import com.pickaudio.data.preferences.UserPreferences
 import com.pickaudio.data.repository.*
 import com.pickaudio.ui.components.UpdateDialog
+import com.pickaudio.ui.theme.pickAudioColorScheme
 import com.pickaudio.ui.components.rememberRelinkFileAction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -42,6 +47,12 @@ fun SettingsScreen(
     val app = LocalContext.current.applicationContext as PickAudioApplication
     val scope = rememberCoroutineScope()
     val theme by userPreferences.themeMode.collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
+    val themeColor by userPreferences.themeColor.collectAsStateWithLifecycle(initialValue = ThemeColor.BLUE)
+    val darkTheme = when (theme) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
     val filterShort by userPreferences.filterShortAudio.collectAsStateWithLifecycle(initialValue = true)
     val onlineQuality by userPreferences.defaultOnlineQuality.collectAsStateWithLifecycle(initialValue = Quality.Q128K)
     val downloadQuality by userPreferences.defaultDownloadQuality.collectAsStateWithLifecycle(initialValue = Quality.Q320K)
@@ -98,12 +109,22 @@ fun SettingsScreen(
     Scaffold(topBar = {
         TopAppBar(title = { Text(stringResource(com.pickaudio.R.string.settings_title)) }, navigationIcon = { IconButton(onClick = onBack, enabled = !busy && !cacheBusy) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(com.pickaudio.R.string.action_back)) } })
     }, modifier = modifier.fillMaxSize()) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(padding).testTag("settings_list"), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             item {
                 Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_001), style = MaterialTheme.typography.titleMedium)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { ThemeMode.entries.forEach { mode ->
-                    FilterChip(theme == mode, { scope.launch { userPreferences.setThemeMode(mode) } }, label = { Text(mode.label) })
+                    FilterChip(theme == mode, { scope.launch { userPreferences.setThemeMode(mode) } }, label = { Text(mode.label) }, modifier = Modifier.testTag("theme_mode_${mode.name}"))
                 } }
+                Text(stringResource(com.pickaudio.R.string.settings_theme_color), style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(top = 12.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ThemeColor.entries.forEach { color ->
+                        FilterChip(selected = themeColor == color, onClick = { scope.launch { userPreferences.setThemeColor(color) } },
+                            label = { Text(color.label) }, leadingIcon = {
+                                Box(Modifier.size(16.dp).background(pickAudioColorScheme(color, darkTheme).primary, CircleShape))
+                            }, modifier = Modifier.testTag("theme_color_${color.name}"))
+                    }
+                }
             }
             item {
                 HorizontalDivider(); Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_002), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))

@@ -10,6 +10,7 @@
     public void onLxSend(java.lang.String, java.lang.String);
     public void onLxRequest(long, java.lang.String, java.lang.String);
     public java.lang.String md5(byte[]);
+    public byte[] aesEncrypt(byte[], java.lang.String, byte[], byte[]);
 }
 
 # Gson payloads persisted across versions; field names are part of the disk/wire format.

@@ -234,6 +234,9 @@ interface SourceDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertDefaultPlatformSelection(selection: PlatformSourceSelectionEntity)
+
+    @Query("UPDATE platform_source_selection SET sourceId = :replacement WHERE platform = :platform AND sourceId = :previous")
+    suspend fun replacePlatformSelection(platform: String, previous: String, replacement: String)
 }
 
 @Dao

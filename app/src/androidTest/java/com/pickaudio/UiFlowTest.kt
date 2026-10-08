@@ -76,7 +76,7 @@ class UiFlowTest {
             assertFalse(runBlocking { app.libraryRepository.getAllTracks().first() }.any { it.id == "online_tx_${item.songId}" })
             compose.onNodeWithText("加入曲库").performClick()
             compose.waitUntil(5000) { runBlocking { app.libraryRepository.libraryTrackIds.first() }.contains("online_tx_${item.songId}") }
-            compose.onNodeWithText("已在曲库").assertIsDisplayed()
+            compose.onNodeWithText("已在曲库").performScrollTo().assertIsDisplayed()
             compose.onNodeWithContentDescription("收起播放器").performClick()
             compose.onNodeWithText("曲库").performClick()
             compose.waitUntil(5000) { compose.onAllNodesWithText(item.title).fetchSemanticsNodes().size == 2 }
@@ -160,7 +160,7 @@ class UiFlowTest {
         compose.onNodeWithContentDescription("配置音乐源").performClick()
         compose.onNodeWithText("导入本地脚本").assertIsDisplayed()
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("测试兼容性"))
-        compose.onNodeWithText("测试兼容性").assertIsDisplayed()
+        compose.onAllNodesWithText("测试兼容性").onFirst().assertIsDisplayed()
     }
 
     @Test fun missingFileShowsRepairAndClearingQueueCanBeUndone() {

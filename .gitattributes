@@ -1,0 +1,2 @@
+# Keep the user-supplied source byte-for-byte identical on Windows and CI.
+app/src/main/assets/sources/*.js -text -whitespace

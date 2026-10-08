@@ -9,6 +9,7 @@ import com.google.gson.JsonParser
 import com.pickaudio.data.db.*
 import com.pickaudio.data.model.Quality
 import com.pickaudio.data.model.ThemeMode
+import com.pickaudio.data.model.ThemeColor
 import com.pickaudio.data.preferences.UserPreferences
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -195,6 +196,7 @@ class BackupManager(private val context: Context, private val database: PickAudi
             require(text(key, 64) && text(value, 128)) { "备份设置无效" }
             require(when (key) {
                 "theme" -> ThemeMode.entries.any { it.name == value }
+                "themeColor" -> ThemeColor.entries.any { it.name == value }
                 "onlineQuality", "downloadQuality" -> Quality.entries.any { it.value == value }
                 "filterShortAudio", "wifiOnly", "translation" -> value.toBooleanStrictOrNull() != null
                 "lyricSize" -> value.toIntOrNull()?.let { it in 14..28 } == true

@@ -263,6 +263,62 @@ static JSValue js_host_md5(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     return result;
 }
 
+static jbyteArray js_crypto_bytes(JSContext *ctx, JNIEnv *env, JSValueConst value) {
+    size_t offset = 0, length = 0, element_size = 0, total = 0;
+    JSValue buffer = JS_GetTypedArrayBuffer(ctx, value, &offset, &length, &element_size);
+    if (JS_IsException(buffer)) return NULL;
+    uint8_t *bytes = JS_GetArrayBuffer(ctx, &total, buffer);
+    if (length > 1024 * 1024 || offset > total || length > total - offset || (!bytes && length)) {
+        JS_FreeValue(ctx, buffer);
+        JS_ThrowRangeError(ctx, "Invalid AES buffer or input exceeds 1 MiB");
+        return NULL;
+    }
+    jbyteArray result = (*env)->NewByteArray(env, (jsize)length);
+    if (result && length) (*env)->SetByteArrayRegion(env, result, 0, (jsize)length, (const jbyte *)(bytes + offset));
+    JS_FreeValue(ctx, buffer);
+    return result;
+}
+
+static JSValue js_host_aes_encrypt(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    RuntimeUserData *ud = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
+    JNIEnv *env = ud ? get_jni_env(ud->jvm) : NULL;
+    if (!env || !ud->host_callback_global || argc < 4) return JS_ThrowTypeError(ctx, "AES requires data, mode, key and IV");
+    JSValue result = JS_EXCEPTION;
+    jbyteArray data = NULL, key = NULL, iv = NULL, encrypted = NULL;
+    jstring mode = NULL;
+    jclass clazz = NULL;
+    uint8_t *output = NULL;
+    data = js_crypto_bytes(ctx, env, argv[0]);
+    if (!data) goto cleanup;
+    mode = java_js_value(ctx, env, argv[1]);
+    if (!mode) goto cleanup;
+    key = js_crypto_bytes(ctx, env, argv[2]);
+    if (!key) goto cleanup;
+    iv = js_crypto_bytes(ctx, env, argv[3]);
+    if (!iv) goto cleanup;
+    clazz = (*env)->GetObjectClass(env, ud->host_callback_global);
+    jmethodID method = clazz ? (*env)->GetMethodID(env, clazz, "aesEncrypt", "([BLjava/lang/String;[B[B)[B") : NULL;
+    if (method) encrypted = (jbyteArray)(*env)->CallObjectMethod(env, ud->host_callback_global, method, data, mode, key, iv);
+    if (host_failed(ctx, env)) goto cleanup;
+    if (!encrypted) { result = JS_ThrowInternalError(ctx, "AES encryption unavailable"); goto cleanup; }
+    jsize length = (*env)->GetArrayLength(env, encrypted);
+    output = malloc((size_t)length);
+    if (!output) { result = JS_ThrowOutOfMemory(ctx); goto cleanup; }
+    (*env)->GetByteArrayRegion(env, encrypted, 0, length, (jbyte *)output);
+    if (host_failed(ctx, env)) goto cleanup;
+    result = JS_NewArrayBufferCopy(ctx, output, (size_t)length);
+cleanup:
+    free(output);
+    if (data) (*env)->DeleteLocalRef(env, data);
+    if (key) (*env)->DeleteLocalRef(env, key);
+    if (iv) (*env)->DeleteLocalRef(env, iv);
+    if (mode) (*env)->DeleteLocalRef(env, mode);
+    if (encrypted) (*env)->DeleteLocalRef(env, encrypted);
+    if (clazz) (*env)->DeleteLocalRef(env, clazz);
+    host_failed(ctx, env);
+    return result;
+}
+
 JNIEXPORT jlong JNICALL
 Java_com_pickaudio_source_QuickJsNativeBridge_nativeCreateRuntime(JNIEnv *env, jobject thiz) {
     JSRuntime *rt = JS_NewRuntime();
@@ -330,6 +386,7 @@ Java_com_pickaudio_source_QuickJsNativeBridge_nativeRegisterHostBridge(JNIEnv *e
     JSValue global_obj = JS_GetGlobalObject(ctx);
 
     JS_SetPropertyStr(ctx, global_obj, "__host_md5", JS_NewCFunction(ctx, js_host_md5, "md5", 1));
+    JS_SetPropertyStr(ctx, global_obj, "__host_aesEncrypt", JS_NewCFunction(ctx, js_host_aes_encrypt, "aesEncrypt", 4));
 
     // Setup console
     JSValue console = JS_NewObject(ctx);
@@ -410,6 +467,10 @@ Java_com_pickaudio_source_QuickJsNativeBridge_nativeRegisterHostBridge(JNIEnv *e
         "    },\n"
         "    crypto: {\n"
         "        md5: function(str) { return globalThis.__host_md5(str); },\n"
+        "        aesEncrypt: function(data, mode, key, iv) {\n"
+        "            var from = globalThis.lx.utils.buffer.from;\n"
+        "            return new Uint8Array(globalThis.__host_aesEncrypt(from(data), mode, from(key), from(iv || '')));\n"
+        "        },\n"
         "        randomBytes: function(size) {\n"
         "            var arr = new Uint8Array(size);\n"
         "            for (var i = 0; i < size; i++) arr[i] = Math.floor(Math.random() * 256);\n"

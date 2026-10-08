@@ -25,6 +25,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.pickaudio.data.model.ThemeMode
+import com.pickaudio.data.model.ThemeColor
 import com.pickaudio.ui.components.MiniPlayer
 import com.pickaudio.ui.components.ConnectedMiniPlayer
 import com.pickaudio.ui.screens.*
@@ -62,8 +63,9 @@ class MainActivity : ComponentActivity() {
             val userPrefs = app.userPreferences
             val coordinator = app.playbackCoordinator
             val themeMode by userPrefs.themeMode.collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
+            val themeColor by userPrefs.themeColor.collectAsStateWithLifecycle(initialValue = ThemeColor.BLUE)
 
-            PickAudioTheme(themeMode = themeMode) {
+            PickAudioTheme(themeMode = themeMode, themeColor = themeColor) {
                 MainApp(app = app)
             }
         }

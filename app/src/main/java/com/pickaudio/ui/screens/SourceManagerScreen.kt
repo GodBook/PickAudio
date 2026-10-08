@@ -78,10 +78,13 @@ fun SourceManagerScreen(sourceManager: LxSourceManager, onBack: () -> Unit, modi
                     }
                 }
             }
-            item { HorizontalDivider(); Text("已导入 · ${sources.size} 个音源", style = MaterialTheme.typography.titleMedium) }
+            item { HorizontalDivider(); Text("可用音源 · ${sources.size} 个", style = MaterialTheme.typography.titleMedium) }
             items(sources, key = { it.id }) { source ->
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(source.name, style = MaterialTheme.typography.titleMedium)
+                    if (LxSourceManager.isBuiltinSource(source.id)) Text(
+                        if (source.id == LxSourceManager.BUILTIN_STELLARWAVE_ID) "内置 · 默认音源" else "内置 · 备用线路",
+                        color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                     Text("v${source.version} · ${source.author.ifBlank { "作者未注明" }}", style = MaterialTheme.typography.bodySmall)
                     Text(source.description, style = MaterialTheme.typography.bodyMedium)
                     sourceManager.capabilitiesForSource(source).values.filter { it.platform in listOf("wy", "tx") }.forEach { capability ->
@@ -90,7 +93,7 @@ fun SourceManagerScreen(sourceManager: LxSourceManager, onBack: () -> Unit, modi
                     Text(health[source.id] ?: "尚未测试", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { scope.launch { sourceManager.testSource(source) } }, enabled = health[source.id] != "正在测试") { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_007)) }
-                        if (source.id != "builtin_aggregate") TextButton(onClick = { deleting = source }) { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_008), color = MaterialTheme.colorScheme.error) }
+                        if (!LxSourceManager.isBuiltinSource(source.id)) TextButton(onClick = { deleting = source }) { Text(stringResource(com.pickaudio.R.string.ui_sourcemanagerscreen_008), color = MaterialTheme.colorScheme.error) }
                     }
                     HorizontalDivider()
                 }
