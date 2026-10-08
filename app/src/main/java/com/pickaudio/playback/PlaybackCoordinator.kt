@@ -914,6 +914,8 @@ class PlaybackCoordinator(
         _isPlaying.value = false
         progressTickerJob?.cancel()
         snapshotSaverJob?.cancel()
-        if (_currentTrack.value != null) _uiState.value = PlaybackUiState(PlaybackPhase.PAUSED)
+        if (_currentTrack.value != null && _uiState.value.phase !in listOf(PlaybackPhase.ERROR, PlaybackPhase.CHOOSE_VERSION)) {
+            _uiState.value = _uiState.value.copy(phase = PlaybackPhase.PAUSED, message = null)
+        }
     }
 }

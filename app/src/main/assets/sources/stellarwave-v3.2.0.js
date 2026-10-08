@@ -607,11 +607,13 @@ const TX_BACKENDS = [
   
   {
     name: 'QQ官方',
-    fetch: async (songmid, quality) => {
+    fetch: async (songmid, quality, musicInfo) => {
       const fileInfo = TX_FILE_CONFIG[quality]
       if (!fileInfo) throw new Error('不支持的音质')
       const guid = randomGuid()
-      const file = fileInfo.s + songmid + fileInfo.e
+      // PickAudio: the recording MID and audio file MID are different QQ identifiers.
+      const mediaMid = musicInfo?.strMediaMid || musicInfo?.mediaMid || musicInfo?.media_mid || musicInfo?.file?.media_mid || songmid
+      const file = fileInfo.s + mediaMid + fileInfo.e
       const reqData = {
         req_0: {
           module: 'vkey.GetVkeyServer',

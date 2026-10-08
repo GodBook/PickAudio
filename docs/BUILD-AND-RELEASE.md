@@ -1,6 +1,6 @@
 # 构建、回归与发布基线
 
-应用ID为com.pickaudio，当前源码版本1.4.1/code 14。version.properties 为源码构建版本的唯一入口；根目录 version.json 描述已公开发布的APK，不随本地构建覆盖，在正式Release可下载后同步。
+应用ID为com.pickaudio，当前源码版本1.4.2/code 15。version.properties 为源码构建版本的唯一入口；根目录 version.json 描述已公开发布的APK，不随本地构建覆盖，在正式Release可下载后同步。
 
 ## 环境和常规检查
 
@@ -58,7 +58,7 @@ adb -s emulator-5560 shell am start -W -n com.pickaudio/.MainActivity --ez open_
 
 ## 发布检查
 
-Release默认为未签名构建。沿用原项目证书签名；本次提升至1.4.1/code 14，核验本地1.4.0/code 13和公开1.3.2/code 12的覆盖安装。先完成本地覆盖安装与数据保留验证，再检查远端CI并发布；实体蓝牙、TalkBack和实体升级记录按实际验证范围记录。
+Release默认为未签名构建。沿用原项目证书签名；本次提升至1.4.2/code 15，核验公开1.4.1/code 14的覆盖安装。先完成本地覆盖安装与数据保留验证，再检查远端CI并发布；实体蓝牙、TalkBack和实体升级记录按实际验证范围记录。
 
 ```powershell
 ./scripts/verify-release.ps1 -ApkPath <signed-apk> -PreviousVersionCode 13 -ExpectedCertificateSha256 <original-certificate-sha256> -SdkPath D:/dev/android-sdk -ChangelogPath <release-notes> -OutputDirectory app/build/release-candidate
