@@ -16,3 +16,7 @@
 正式 APK 沿用原项目证书，可覆盖旧正式版。签名证书 SHA-256：`1e564b554f48b6a69d80e6d76c704e8b16e9a600d2511205754839c729d4a281`。安装包摘要见 Release 的 `SHA256SUMS.txt`。
 
 修复依据与实际验证范围见 [QQ 播放修复记录](https://github.com/GodBook/PickAudio/blob/main/docs/BUGFIX-QQ-PLAYBACK-1.4.2.md)。
+
+71 项 JVM 测试及本地 14 项专项回归通过；GitHub 的 Debug、R8 裁剪验证变体各 79 项 API 36 设备测试全部通过，构建、Lint 和 schema 检查通过。原签名 1.4.1 → 1.4.2 覆盖升级的数据保留、实际生产包的冷恢复、后台播放、自然切歌和媒体暂停已复验。此次旧版模拟器复验未捕获用户手机的进程闪退，实体手机效果仍需按实际情况核对。
+
+安装包大小：8,226,077 字节（约 7.85 MiB）。SHA-256：`e88aac535edbf9bd8cf8b497916b96b818d09942ade6271ce4593aad28eb5a4c`。

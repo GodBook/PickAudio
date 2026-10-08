@@ -22,3 +22,19 @@
 旧版证据保存在 `app/build/qq-crash-1.4.2/`：`baseline-qq-id-test.txt` 为编号差异的失败回归，`baseline-results.xml`、`baseline-error.xml` 和 `baseline-logcat.txt` 为实际搜索及解析失败证据。
 
 `baseline-recovery-tests.txt` 另记录旧版两项失败：320×600 dp、1.5 倍字体下重试按钮不可见，停止播放服务后 `ERROR` 被覆盖为 `PAUSED`。
+
+修复后本地 71 项 JVM 测试通过。14 项 QQ、脚本生命周期、升级绑定及小屏控制专项全部通过（37.863 秒），覆盖实际内置脚本的媒体编号、全部后端失败后再次解析、取消和迟到回调、解析超时、服务退出后重试、完整 11 秒前台启动期限及后续本地歌曲播放。设备崩溃日志为空。Debug/Release 构建、Lint 和 Room schema 检查通过。
+
+[GitHub 完整 CI](https://github.com/GodBook/PickAudio/actions/runs/37733064291) 对源码提交 `16d159565305ca9961a5e262b4288199f40c6644` 验证通过：Debug 与 R8 裁剪验证变体各 79 项 API 36 设备测试，失败和跳过均为零。报告保存在 `app/build/release-1.4.2/ci-debug/` 与 `ci-validation/`。验证变体保留测试需要的公开接口，不等同于实际生产包的全部重命名行为。
+
+原签名 1.4.1/code 14 → 1.4.2/code 15 覆盖升级通过，UID、偏好文件字节、歌曲与平台标识、歌单、收藏、歌词校准、重复队列、五秒暂停进度、自定义音源、明确停用状态、本地音频和 1024 字节暂停下载均保留。数据库仍为 v5，完整性正常，无外键错误。升级后实际内置脚本摘要更新为 `be401b4fb325443001a5903b303f61541c8e265a116fb017fddff5d4a0bb3fd6`。自有夹具已清理，报告为 `app/build/release-1.4.2/official-upgrade-verification.json`。
+
+实际原签名生产裁剪包另通过五秒暂停进度冷恢复、真实播放控件、前台服务、后台播放、重复队列自然切歌及媒体键暂停复验，报告为 `app/build/release-1.4.2/production-smoke.json`。
+
+真实 QQ 官方接口在本次 Faded 样本的标准匿名 GET/POST 请求中均返回请求码 1000、没有可用地址；修正编号不等于解除平台权限限制。QQ 解码链路使用保持原曲身份的可控 WAV 服务验证，不宣称该真实 QQ 样本已获匿名播放权限。
+
+## 正式包
+
+包名 `com.pickaudio`，原证书 SHA-256 为 `1e564b554f48b6a69d80e6d76c704e8b16e9a600d2511205754839c729d4a281`。版本、单调版本号、签名、arm64-v8a/x86_64 双 ABI、ZIP 与 ELF 16 KiB 对齐检查通过。
+
+安装包为 `PickAudio-v1.4.2-release.apk`，8,226,077 字节（约 7.85 MiB），SHA-256 为 `e88aac535edbf9bd8cf8b497916b96b818d09942ade6271ce4593aad28eb5a4c`。
