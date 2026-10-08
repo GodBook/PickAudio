@@ -200,6 +200,7 @@ fun PlayerScreen(
                     color = MaterialTheme.colorScheme.surfaceContainer) {
                     Column(Modifier.padding(12.dp)) {
                         Text(state.message ?: state.phase.label, style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 3, overflow = TextOverflow.Ellipsis,
                             color = if (state.phase == PlaybackPhase.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(onClick = coordinator::retryCurrent) { Text(stringResource(com.pickaudio.R.string.action_retry)) }

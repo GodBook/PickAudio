@@ -475,7 +475,10 @@ class LxSourceManager(
         } catch (e: CancellationException) { throw e }
         catch (e: AlternativeVersionException) { throw e }
         catch (e: Exception) {
-            throw IllegalStateException("音乐源解析失败，请重试或切换音源：${e.message}", e)
+            // Aggregate scripts can report every backend's failure. Keep the complete cause in
+            // diagnostics without pushing the player's controls below a wall of backend details.
+            val reason = e.message?.lineSequence()?.firstOrNull()?.take(160).orEmpty()
+            throw IllegalStateException("音乐源解析失败${if (reason.isBlank()) "" else "：$reason"}，请重试或更换音源", e)
         }
     }
 

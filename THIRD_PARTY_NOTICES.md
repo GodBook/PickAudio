@@ -11,7 +11,7 @@ PickAudio includes the following third-party components. This notice covers thos
 | Coil | https://github.com/coil-kt/coil | Apache-2.0 |
 | JetBrains annotations | https://github.com/JetBrains/java-annotations | Apache-2.0 |
 | QuickJS 2026-06-04, bundled native source | https://bellard.org/quickjs/ | MIT |
-| StellarWave 星澜聚合音源 v3.2.0, user-provided LX script, author: 星澜团队 | Bundled unchanged at app/src/main/assets/sources/stellarwave-v3.2.0.js; its header supplies the author, version and MIT declaration | MIT (as declared in the supplied script) |
+| StellarWave 星澜聚合音源 v3.2.0, user-provided LX script, author: 星澜团队 | Bundled at app/src/main/assets/sources/stellarwave-v3.2.0.js with a PickAudio fix separating QQ recording and media file identifiers; original header, author and MIT declaration retained | MIT (as declared in the supplied script) |
 
 QuickJS source notices are retained in app/src/main/cpp/quickjs. Its Android host bridge is maintained in this project; the bundled engine is built using its own VERSION value.
 

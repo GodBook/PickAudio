@@ -96,6 +96,30 @@ class BuiltinStellarWaveTest {
 
     private data class ScriptRequest(val id: Long, val url: String, val options: String)
 
+    @Test fun bundledScriptPatchKeepsExistingBindingsAndDisabledState() = runBlocking {
+        val db = database()
+        try {
+            val previous = SourceScriptEntity(LxSourceManager.BUILTIN_STELLARWAVE_ID, "已有星澜", version = "3.2.0",
+                scriptHash = "old-bundled-script-hash", scriptContent = "old script", capabilitiesJson = "{}",
+                isEnabled = false, createdAt = 123L)
+            val custom = SourceScriptEntity("custom_patch_fixture", "自定义", scriptHash = "custom_patch_hash",
+                scriptContent = "unchanged", capabilitiesJson = "{}")
+            db.sourceDao().insertOrUpdate(previous)
+            db.sourceDao().insertOrUpdate(custom)
+            db.sourceDao().setPlatformSelection(PlatformSourceSelectionEntity("wy", custom.id))
+            db.sourceDao().setPlatformSelection(PlatformSourceSelectionEntity("tx", previous.id))
+            LxSourceManager(context, db).use { it.ensureBuiltinSources() }
+            val patched = db.sourceDao().getSourceById(previous.id)!!
+            assertNotEquals(previous.scriptHash, patched.scriptHash)
+            assertEquals(context.assets.open(LxSourceManager.STELLARWAVE_ASSET).bufferedReader().use { it.readText() }, patched.scriptContent)
+            assertFalse(patched.isEnabled)
+            assertEquals(previous.createdAt, patched.createdAt)
+            assertEquals(custom.id, db.sourceDao().getSelectionForPlatform("wy")?.sourceId)
+            assertEquals(previous.id, db.sourceDao().getSelectionForPlatform("tx")?.sourceId)
+            assertEquals(custom, db.sourceDao().getSourceById(custom.id))
+        } finally { db.close() }
+    }
+
     @Test fun suppliedScriptUsesRealAesEapiAndResolvesItsConcurrentFallback() = runBlocking {
         QuickJsEngine().use { engine ->
             val requests = Channel<ScriptRequest>(Channel.UNLIMITED)
