@@ -37,3 +37,15 @@
 设备为本次新建、无个人数据的 `PickAudio_Playback_API36_20261008` / `emulator-5560`。首次运行测试框架时出现类校验启动超时，系统应用也出现同类超时；完成应用和测试包的 `speed` 预编译后再进行上述旧包对比。该环境启动异常记录在 `baseline-startup-anr.txt`，不作为播放修复的复现依据。
 
 这些结果覆盖 API 36 模拟器；用户手机的原始崩溃日志、实体蓝牙和厂商后台管理策略尚未验证。
+
+## v1.4.1 发布验收
+
+版本提升至 1.4.1/code 14 后，71 项单测、Release 构建和 Lint 复验通过。GitHub [分支完整 CI](https://github.com/GodBook/PickAudio/actions/runs/37725208619) 和 [PR 完整 CI](https://github.com/GodBook/PickAudio/actions/runs/37725493254) 均通过：Debug、R8 裁剪验证变体各 72 项 API 36 设备测试，无失败或跳过。
+
+正式 APK 使用原项目证书，包名 `com.pickaudio`，证书 SHA-256 为 `1e564b554f48b6a69d80e6d76c704e8b16e9a600d2511205754839c729d4a281`；签名、单调版本号、双 ABI 和 ZIP/ELF 16 KiB 对齐检查通过。
+
+在专用模拟器上分别直接覆盖原签名 1.3.2/code 12 和 1.4.0/code 13。应用 UID、偏好文件字节、歌曲/歌单/收藏/歌词与校准、重复队列及五秒暂停进度、自定义音源和明确停用状态均保留；本地音频和 1024 字节暂停下载文件未变，数据库 v5 完整性正常且无外键错误。两组夹具均已清理；报告位于 `app/build/release-1.4.1/from-1.3.2/` 和 `from-1.4.0/`。
+
+原签名实际生产裁剪包额外通过五秒暂停进度冷恢复、真实播放控件、前台服务、后台播放、队列第 2 项自然循环至第 0 项、媒体键暂停及暂停控件复验。报告为 `app/build/release-1.4.1/production-smoke.json`，私有 WAV 和自有队列夹具已清理。
+
+发布 APK：8,226,077 字节（约 7.85 MiB），SHA-256 为 `400c4aac1c2dbd348dd256a3807552938830cb1354e292834f71e7d7472ebcce`。
