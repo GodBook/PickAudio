@@ -33,3 +33,5 @@ Full license texts are in licenses/Apache-2.0.txt and licenses/QuickJS-MIT.txt. 
 The supplied StellarWave script's original header and attribution are retained. Its homepage is a placeholder in the supplied file, so no verified upstream repository is claimed. The MIT text is included in licenses/StellarWave-MIT.txt and in the APK's offline notices. Playback services called by the script are operated by third parties; the script's license does not grant rights to their music content.
 
 Development tools and test-only dependencies (Gradle, Android SDK/NDK/CMake, JUnit, Android test libraries and MockWebServer) are not included in the production application. Their upstream licenses continue to apply when those tools or test binaries are redistributed.
+
+The native QQ source uses the public 落月 API endpoint at https://api.vkeys.cn/music/tencent/song/link and QQ's returned media servers. The adapter is maintained in this project and does not bundle the service's server code or music. Use of the service and its music content remains subject to the respective providers' terms and authorization.

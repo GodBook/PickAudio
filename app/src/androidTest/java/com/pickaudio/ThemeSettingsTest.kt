@@ -40,6 +40,7 @@ class ThemeSettingsTest {
                 SettingsScreen(app.userPreferences, app.backupManager, onNavigateToSourceManager = {}, onBack = {})
             }
         }
+        compose.onNodeWithTag("settings_category_APPEARANCE").performClick()
         for (mode in listOf(ThemeMode.LIGHT, ThemeMode.DARK)) {
             compose.onNodeWithTag("theme_mode_${mode.name}").performClick()
             for (color in ThemeColor.entries) {

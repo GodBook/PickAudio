@@ -83,7 +83,11 @@ fun SourceManagerScreen(sourceManager: LxSourceManager, onBack: () -> Unit, modi
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(source.name, style = MaterialTheme.typography.titleMedium)
                     if (LxSourceManager.isBuiltinSource(source.id)) Text(
-                        if (source.id == LxSourceManager.BUILTIN_STELLARWAVE_ID) "内置 · 默认音源" else "内置 · 备用线路",
+                        when (source.id) {
+                            LxSourceManager.BUILTIN_QQ_ID -> "内置 · QQ 默认音源"
+                            LxSourceManager.BUILTIN_STELLARWAVE_ID -> "内置 · 网易云默认 / QQ 备用"
+                            else -> "内置 · 备用线路"
+                        },
                         color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                     Text("v${source.version} · ${source.author.ifBlank { "作者未注明" }}", style = MaterialTheme.typography.bodySmall)
                     Text(source.description, style = MaterialTheme.typography.bodyMedium)

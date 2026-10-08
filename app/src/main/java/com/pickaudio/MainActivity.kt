@@ -125,11 +125,6 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
         }
     }.collectAsStateWithLifecycle(initialValue = false)
 
-    // Back handler for full player
-    BackHandler(enabled = showFullPlayer) {
-        showFullPlayer = false
-    }
-
     CompositionLocalProvider(LocalPlayerOverlayVisible provides showFullPlayer) {
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
@@ -289,6 +284,9 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
             enter = slideInVertically(initialOffsetY = { it }),
             exit = slideOutVertically(targetOffsetY = { it })
         ) {
+            // Register with the overlay's lifetime, after the destination's back callback exists.
+            // NavHost can register that callback later through subcomposition.
+            BackHandler(enabled = showFullPlayer) { showFullPlayer = false }
             Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 PlayerScreen(
                     coordinator = coordinator,
