@@ -32,3 +32,5 @@
 最后修正文案的正式包与覆盖升级验收包的 DEX 一致，SHA-256 为 `c8ceef7188b54d8408147d5a6334acf2ec5d33f4d06c0eb15f8e96c72b74c502`。正式包已重新核验版本、签名、双 ABI、ZIP/ELF 16 KiB 对齐。
 
 安装包 `PickAudio-v1.4.3-release.apk`，8,242,461 字节（约 7.86 MiB）；SHA-256：`cad5db5fff582b5006db747a4afe07df22ec02b59ffec7d6c0b4f45a3ba09e2f`。证书 SHA-256：`1e564b554f48b6a69d80e6d76c704e8b16e9a600d2511205754839c729d4a281`。详细签名与升级报告在 `app/build/release-1.4.3/`。
+
+源码通过 [PR #3](https://github.com/GodBook/PickAudio/pull/3) 合入 main，[v1.4.3 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.4.3) 已公开发布为最新版本，含原签名 APK、SHA256SUMS.txt 和版本元数据。正式资产回下载的大小、SHA-256 及版本元数据与本地发布文件一致，根目录更新元数据已同步。

@@ -1,10 +1,10 @@
 {
-  "versionCode": 15,
-  "versionName": "1.4.2",
-  "changelog": "1. 修正内置 QQ 官方线路的歌曲编号与媒体编号使用，避免请求错误音频文件。\n2. 解析失败显示简短提示，错误与重试操作固定在可见控制区。\n3. 服务退出后保留错误状态，支持重试及继续播放其他歌曲。\n4. 原签名安装包约 7.85 MiB，已验证覆盖 1.4.1 并保留设置、歌单、收藏、重复队列、播放进度、自定义音源及暂停下载。\nQQ 曲目是否可播放仍受平台授权和音源可用性影响。",
-  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.4.2/PickAudio-v1.4.2-release.apk",
-  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.4.2",
-  "apkSize": 8226077,
-  "sha256": "e88aac535edbf9bd8cf8b497916b96b818d09942ade6271ce4593aad28eb5a4c",
+  "versionCode": 16,
+  "versionName": "1.4.3",
+  "changelog": "1. 新增内置 QQ 直连音源，按原曲编号解析并检查真实音频，拒绝试听片段和错误歌曲。\n2. 设置重排为六个分类页面，显示当前值摘要，增加歌词字号预览。\n3. 搜索试听后返回原结果页，保留查询、平台和滚动位置。\n4. 原签名安装包约 7.86 MiB，已验证覆盖升级保留设置、歌单、收藏、队列、进度和暂停下载。\nQQ 曲目可用性以外部服务、平台授权和实际网络为准。",
+  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.4.3/PickAudio-v1.4.3-release.apk",
+  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.4.3",
+  "apkSize": 8242461,
+  "sha256": "cad5db5fff582b5006db747a4afe07df22ec02b59ffec7d6c0b4f45a3ba09e2f",
   "publishTime": "2026-10-08"
 }
