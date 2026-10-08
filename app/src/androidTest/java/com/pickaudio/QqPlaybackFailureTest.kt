@@ -42,7 +42,7 @@ class QqPlaybackFailureTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
     private val app get() = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as PickAudioApplication
 
-    private suspend fun await(condition: () -> Boolean) = withTimeout(15_000) {
+    private suspend fun await(condition: () -> Boolean) = withTimeout(20_000) {
         while (!withContext(Dispatchers.Main) { condition() }) delay(50)
     }
 
@@ -50,13 +50,14 @@ class QqPlaybackFailureTest {
     private fun serviceIsRunning() = app.getSystemService(ActivityManager::class.java).getRunningServices(100)
         .any { it.service.className == PlaybackService::class.java.name }
 
-    private suspend fun withFailureFixture(block: suspend (PlaybackCoordinator, Track) -> Unit) {
+    private suspend fun withFailureFixture(pending: Boolean = false, block: suspend (PlaybackCoordinator, Track) -> Unit) {
         app.sourceManager.ensureBuiltinSources()
         val previous = app.database.sourceDao().getSelectionForPlatform("tx")!!
         val quality = app.userPreferences.defaultOnlineQuality.first()
+        val handler = if (pending) "() => new Promise(() => {})" else """() => Promise.reject(new Error(
+            '所有后端均失败（共 23 个）\n' + Array(23).fill('测试后端：当前歌曲不可用，请检查网络和平台授权').join('\n')))""".trimIndent()
         val source = app.sourceManager.importSourceFromCode("""
-            lx.on(lx.EVENT_NAMES.request, () => Promise.reject(new Error(
-                '所有后端均失败（共 23 个）\n' + Array(23).fill('测试后端：当前歌曲不可用，请检查网络和平台授权').join('\n'))));
+            lx.on(lx.EVENT_NAMES.request, $handler);
             lx.send(lx.EVENT_NAMES.inited, {status:true,sources:{tx:{name:'QQ失败回归',actions:['musicUrl'],qualitys:['128k']}}});
         """.trimIndent())
         val id = "qq_failure_${System.nanoTime()}"
@@ -123,6 +124,15 @@ class QqPlaybackFailureTest {
             await { coordinator.uiState.value.phase == PlaybackPhase.ERROR && serviceIsRunning() }
             delay(11_000) // Survive Android 16's complete foreground service start deadline.
             assertEquals(PlaybackPhase.ERROR, coordinator.uiState.value.phase)
+            assertFalse(coordinator.playRequested.value)
+            withContext(Dispatchers.Main) { coordinator.setQueueAndPlay(listOf(local)) }
+            await { coordinator.isPlaying.value && coordinator.currentPositionMs.value > 0 }
+        }
+    }
+
+    @Test fun qqResolutionTimeoutLeavesRetryableErrorAndOtherSongsCanPlay() = runBlocking {
+        withFailureFixture(pending = true) { coordinator, local ->
+            assertTrue(coordinator.uiState.value.message.orEmpty().contains("15 秒"))
             assertFalse(coordinator.playRequested.value)
             withContext(Dispatchers.Main) { coordinator.setQueueAndPlay(listOf(local)) }
             await { coordinator.isPlaying.value && coordinator.currentPositionMs.value > 0 }
