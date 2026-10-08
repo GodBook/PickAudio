@@ -1,6 +1,6 @@
 # 构建、回归与发布基线
 
-应用ID为com.pickaudio，当前源码版本1.4.0/code 13。version.properties 为源码构建版本的唯一入口；根目录 version.json 描述已公开发布的APK，不随本地构建覆盖，在正式Release可下载后同步。
+应用ID为com.pickaudio，当前源码版本1.4.1/code 14。version.properties 为源码构建版本的唯一入口；根目录 version.json 描述已公开发布的APK，不随本地构建覆盖，在正式Release可下载后同步。
 
 ## 环境和常规检查
 
@@ -54,14 +54,14 @@ adb -s emulator-5560 shell am force-stop com.pickaudio
 adb -s emulator-5560 shell am start -W -n com.pickaudio/.MainActivity --ez open_player true
 ```
 
-媒体服务首次播放请求必须及时进入前台。应用请求携带专用action；Media3内部的无action自启动已配套发布媒体通知，不再创建准备通知或主动刷新通知。否则`onStartCommand`→刷新通知→Media3自启动会形成循环。设备专项同时检查暂停后的有效媒体通知、重复恢复播放、控制器解绑后的后台自然切歌，以及取消解析后的前台期限和真实服务停止。
+媒体服务的每个前台启动请求都必须及时进入前台，包括暂停后迟到的 Media3 无 action 请求。`onStartCommand` 复用已有媒体通知直接调用 `startForeground`，没有通知时才创建准备通知；此处不得触发 Media3 通知刷新，否则会形成自启动循环。播放请求等待服务确认进入前台后再申请音频焦点；缓冲及短暂焦点中断保留播放意图和前台状态。API 36 的本地前台启动时限为 10 秒，超时专项等待 11 秒再断言。设备专项同时检查暂停通知、重复恢复播放、无控制器绑定时的后台切歌、取消解析、真实服务停止及中断后的原进度续播，见 [Android 16 播放修复记录](BUGFIX-ANDROID16-PLAYBACK.md)。
 
 ## 发布检查
 
-Release默认为未签名构建。沿用原项目证书签名；本次从1.3.2/code 12提升至1.4.0/code 13。先完成本地覆盖安装与数据保留验证，再检查远端CI并发布；实体蓝牙、TalkBack和实体升级记录按实际验证范围记录。
+Release默认为未签名构建。沿用原项目证书签名；本次提升至1.4.1/code 14，核验本地1.4.0/code 13和公开1.3.2/code 12的覆盖安装。先完成本地覆盖安装与数据保留验证，再检查远端CI并发布；实体蓝牙、TalkBack和实体升级记录按实际验证范围记录。
 
 ```powershell
-./scripts/verify-release.ps1 -ApkPath <signed-apk> -PreviousVersionCode 12 -ExpectedCertificateSha256 <original-certificate-sha256> -SdkPath D:/dev/android-sdk -ChangelogPath <release-notes> -OutputDirectory app/build/release-candidate
+./scripts/verify-release.ps1 -ApkPath <signed-apk> -PreviousVersionCode 13 -ExpectedCertificateSha256 <original-certificate-sha256> -SdkPath D:/dev/android-sdk -ChangelogPath <release-notes> -OutputDirectory app/build/release-candidate
 ```
 
 脚本核对包名、源码版本、单调版本号、正式证书、签名有效性、双ABI、ELF PT_LOAD和APK ZIP的16KiB对齐，输出实际大小、SHA-256与元数据。输出目录限定在app/build，根目录历史version.json不受影响。仅检查本地未签名包时可使用-AllowUnsigned并指定真实较低的PreviousVersionCode；结果明确为publishable=false。

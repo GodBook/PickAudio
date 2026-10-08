@@ -66,6 +66,7 @@ class PlaybackCoordinator(
     private val gson = Gson()
 
     private var requestJob: Job? = null
+    private var serviceStart: CompletableDeferred<Unit>? = null
     private var requestGeneration = 0L
     private var restoringJob: Job? = null
     private val _restored = MutableStateFlow(false)
@@ -161,6 +162,8 @@ class PlaybackCoordinator(
     private var consecutiveFailures = 0
     private var automaticTrack = false
     private var skipJob: Job? = null
+    private var recoveryJob: Job? = null
+    private var streamRecoveryAttempts = 0
 
     init {
         startSnapshotWriter()
@@ -178,10 +181,21 @@ class PlaybackCoordinator(
                 snapshotSaverJob?.cancel()
             }
             if (playing) _currentTrack.value?.let { track -> scope.launch { userPreferences.recordPlayed(track.id) } }
-            if (_uiState.value.phase !in listOf(PlaybackPhase.ERROR, PlaybackPhase.CHOOSE_VERSION, PlaybackPhase.RESOLVING)) {
-                _uiState.value = _uiState.value.copy(phase = if (playing) PlaybackPhase.PLAYING else PlaybackPhase.PAUSED)
-            }
             saveSnapshot()
+        }
+
+        override fun onEvents(player: Player, events: Player.Events) {
+            if (_uiState.value.phase in listOf(PlaybackPhase.ERROR, PlaybackPhase.CHOOSE_VERSION, PlaybackPhase.RESOLVING)) return
+            // isPlaying also becomes false while buffering or temporarily losing audio focus.
+            // Only a cleared play request represents a pause; keep the service alive while waiting.
+            val phase = when {
+                player.playbackState == Player.STATE_BUFFERING && _playRequested.value -> PlaybackPhase.BUFFERING
+                player.isPlaying -> PlaybackPhase.PLAYING
+                _playRequested.value && player.playbackState == Player.STATE_READY -> PlaybackPhase.READY
+                _currentTrack.value != null -> PlaybackPhase.PAUSED
+                else -> PlaybackPhase.IDLE
+            }
+            _uiState.value = _uiState.value.copy(phase = phase)
         }
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
@@ -224,11 +238,32 @@ class PlaybackCoordinator(
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
             Log.e("PlaybackCoordinator", "ExoPlayer playback error: ${error.errorCodeName}", error)
             _isPlaying.value = false
+            if (recoverStream(error)) return
             _playRequested.value = false
             consecutiveFailures++
             _uiState.value = _uiState.value.copy(phase = PlaybackPhase.ERROR, message = "无法播放这首歌，请检查网络、文件授权或切换音源后重试")
             skipFailedAutomaticTrack()
         }
+    }
+
+    private fun recoverStream(error: androidx.media3.common.PlaybackException): Boolean {
+        val track = _currentTrack.value ?: return false
+        val remote = playerInstance?.currentMediaItem?.localConfiguration?.uri?.scheme in listOf("http", "https")
+        if (!remote || !_playRequested.value || streamRecoveryAttempts >= 2 || !isRecoverableStreamError(error)) return false
+        val attempt = ++streamRecoveryAttempts
+        val generation = requestGeneration
+        val position = playerInstance?.currentPosition?.coerceAtLeast(0) ?: _currentPositionMs.value
+        val quality = _uiState.value.requestedQuality
+        _currentPositionMs.value = position
+        _uiState.value = _uiState.value.copy(phase = PlaybackPhase.RESOLVING, message = "播放连接中断，正在重新连接")
+        recoveryJob?.cancel()
+        recoveryJob = scope.launch {
+            delay(attempt * 1000L)
+            if (generation == requestGeneration && _playRequested.value) {
+                playTrack(track, startPosition = position, automatic = automaticTrack, requestedQuality = quality, recovering = true)
+            }
+        }
+        return true
     }
 
     private fun startProgressTicker() {
@@ -341,6 +376,7 @@ class PlaybackCoordinator(
         publishQueue()
         if (_queue.value.isEmpty()) {
             requestJob?.cancel()
+            recoveryJob?.cancel()
             requestGeneration++
             _playRequested.value = false
             player.stop()
@@ -363,6 +399,7 @@ class PlaybackCoordinator(
     fun clearQueue() {
         clearedQueue = ClearedQueue(queueModel.snapshot(), _currentPositionMs.value, _isPlaying.value || _playRequested.value)
         requestJob?.cancel()
+        recoveryJob?.cancel()
         skipJob?.cancel()
         restoringJob?.cancel()
         requestGeneration++
@@ -444,16 +481,17 @@ class PlaybackCoordinator(
 
     fun playOrPause() {
         if (_uiState.value.phase == PlaybackPhase.ERROR) { retryCurrent(); return }
-        if (_isPlaying.value || (_uiState.value.phase == PlaybackPhase.RESOLVING && _playRequested.value)) pause() else resume()
+        if (_playRequested.value) pause() else resume()
         saveSnapshot()
     }
 
     fun pause() {
         _playRequested.value = false
+        requestJob?.cancel()
+        requestGeneration++
         skipJob?.cancel()
+        recoveryJob?.cancel()
         if (_uiState.value.phase == PlaybackPhase.RESOLVING) {
-            requestJob?.cancel()
-            requestGeneration++
             _uiState.value = _uiState.value.copy(phase = PlaybackPhase.PAUSED, message = "已取消加载，点击播放可重试")
         }
         playerInstance?.pause()
@@ -461,13 +499,36 @@ class PlaybackCoordinator(
     }
 
     fun resume() {
+        if (_uiState.value.phase == PlaybackPhase.RESOLVING) {
+            val generation = requestGeneration
+            _playRequested.value = true
+            scope.launch {
+                try { ensurePlaybackService() }
+                catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    if (generation == requestGeneration) onPlaybackServiceStartFailed(e)
+                }
+            }
+            return
+        }
         if (_currentTrack.value == null && _queue.value.isNotEmpty()) playQueueItem(_currentIndex.value.takeIf { it >= 0 } ?: 0)
+        else if (_currentTrack.value == null) return
         else if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
             _currentTrack.value?.let { playTrack(it, startPosition = if (player.playbackState == Player.STATE_ENDED) 0 else _currentPositionMs.value) }
         } else {
             _playRequested.value = true
-            player.play()
-            ensurePlaybackService()
+            requestJob?.cancel()
+            val generation = ++requestGeneration
+            requestJob = scope.launch {
+                try {
+                    ensurePlaybackService()
+                    ensureActive()
+                    if (generation == requestGeneration && _playRequested.value) player.play()
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    if (generation == requestGeneration) onPlaybackServiceStartFailed(e)
+                }
+            }
         }
     }
 
@@ -477,10 +538,38 @@ class PlaybackCoordinator(
         saveSnapshot()
     }
 
-    private fun ensurePlaybackService() {
-        runCatching { androidx.core.content.ContextCompat.startForegroundService(context,
-            android.content.Intent(context, PlaybackService::class.java).setAction(PlaybackService.ACTION_START_PLAYBACK)) }
-            .onFailure { Log.w("PlaybackCoordinator", "无法启动后台播放服务", it) }
+    private suspend fun ensurePlaybackService() {
+        val ready = serviceStart?.takeUnless { it.isCompleted } ?: CompletableDeferred<Unit>().also {
+            serviceStart = it
+            try {
+                androidx.core.content.ContextCompat.startForegroundService(context,
+                    android.content.Intent(context, PlaybackService::class.java).setAction(PlaybackService.ACTION_START_PLAYBACK))
+            } catch (e: Exception) { it.completeExceptionally(e) }
+        }
+        try {
+            // Android 15+ rejects background audio focus requests until a foreground service exists.
+            withTimeout(8_000) { ready.await() }
+        } catch (e: TimeoutCancellationException) {
+            currentCoroutineContext().ensureActive()
+            ready.cancel()
+            throw IllegalStateException("Playback service did not become ready", e)
+        } finally {
+            if (serviceStart === ready && ready.isCompleted) serviceStart = null
+        }
+    }
+
+    internal fun onPlaybackServiceReady() { serviceStart?.complete(Unit) }
+
+    internal fun onPlaybackServiceStartFailed(error: Exception) {
+        Log.w("PlaybackCoordinator", "无法启动后台播放服务", error)
+        serviceStart?.completeExceptionally(error)
+        requestJob?.cancel()
+        recoveryJob?.cancel()
+        requestGeneration++
+        _playRequested.value = false
+        playerInstance?.pause()
+        _uiState.value = _uiState.value.copy(phase = PlaybackPhase.ERROR, message = "后台播放服务暂时无法启动，请打开应用后重试")
+        saveSnapshot()
     }
 
     fun previous() = previousInternal(false)
@@ -538,10 +627,13 @@ class PlaybackCoordinator(
         }
     }
 
-    private fun playTrack(track: Track, startPosition: Long = 0L, autoPlay: Boolean = true, automatic: Boolean = false, requestedQuality: String? = null) {
+    private fun playTrack(track: Track, startPosition: Long = 0L, autoPlay: Boolean = true, automatic: Boolean = false,
+        requestedQuality: String? = null, recovering: Boolean = false) {
         restoringJob?.cancel()
         requestJob?.cancel()
         skipJob?.cancel()
+        recoveryJob?.cancel()
+        if (!recovering) streamRecoveryAttempts = 0
         automaticTrack = automatic
         if (!automatic) { consecutiveFailures = 0 }
         val generation = ++requestGeneration
@@ -555,16 +647,21 @@ class PlaybackCoordinator(
         _uiState.value = PlaybackUiState(PlaybackPhase.RESOLVING, requestedQuality = requestedQuality)
         _playRequested.value = autoPlay
         player.stop()
-        player.playWhenReady = autoPlay
-        if (autoPlay) ensurePlaybackService()
+        player.playWhenReady = false
 
         requestJob = scope.launch {
             try {
+                if (_playRequested.value) ensurePlaybackService()
                 val mapping = withContext(Dispatchers.IO) { ensureTracksPersisted(listOf(track)) }
                 ensureActive()
                 if (generation != requestGeneration) return@launch
                 applyCanonicalTracks(mapping)
-                val mediaUri = resolveTrackMediaUri(mapping.getValue(track.id), generation, requestedQuality)
+                val mediaUri = try {
+                    resolveTrackMediaUri(mapping.getValue(track.id), generation, requestedQuality)
+                } catch (e: TimeoutCancellationException) {
+                    ensureActive()
+                    throw IllegalStateException("音源请求超时，请重试或更换音源", e)
+                }
                 ensureActive()
                 if (generation != requestGeneration) { return@launch }
                 val mediaItem = MediaItem.Builder()
@@ -576,11 +673,12 @@ class PlaybackCoordinator(
                         .setArtworkUri(track.coverUri?.let { Uri.parse(it) }).build())
                     .build()
 
+                // A controller can request play during a paused preparation.
+                if (_playRequested.value && !autoPlay) ensurePlaybackService()
                 player.setMediaItem(mediaItem)
                 player.prepare()
                 player.seekTo(_currentPositionMs.value)
-                player.playWhenReady = autoPlay
-                if (autoPlay) { ensurePlaybackService() }
+                player.playWhenReady = _playRequested.value
                 _uiState.value = _uiState.value.copy(phase = PlaybackPhase.BUFFERING)
             } catch (e: CancellationException) { throw e }
             catch (e: AlternativeVersionException) {
@@ -796,11 +894,14 @@ class PlaybackCoordinator(
     }
 
     fun onServiceDestroyed() {
+        serviceStart?.cancel(CancellationException("Playback service destroyed"))
+        serviceStart = null
         sleepTimerJob?.cancel()
         _sleepTimerRemainingMs.value = null
         stopAfterState = false
         requestJob?.cancel()
         skipJob?.cancel()
+        recoveryJob?.cancel()
         requestGeneration++
         _playRequested.value = false
         playerInstance?.let { current ->

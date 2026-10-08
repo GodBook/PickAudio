@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.app.PendingIntent
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.ForegroundServiceStartNotAllowedException
 import android.content.pm.ServiceInfo
 import android.media.AudioManager
 import android.util.Log
@@ -54,10 +55,20 @@ class PlaybackService : MediaSessionService() {
         openPlayer = PendingIntent.getActivity(this, 2041, Intent(this, MainActivity::class.java).putExtra("open_player", true),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         mediaSession = MediaSession.Builder(this, player).setSessionActivity(openPlayer).build().also(::addSession)
+        setListener(object : MediaSessionService.Listener {
+            override fun onForegroundServiceStartNotAllowedException() {
+                app.playbackCoordinator.onPlaybackServiceStartFailed(
+                    ForegroundServiceStartNotAllowedException("Media notification could not enter foreground"))
+            }
+        })
         serviceScope.launch {
             combine(app.playbackCoordinator.playRequested, app.playbackCoordinator.uiState) { requested, state ->
                 requested && state.phase in listOf(PlaybackPhase.RESOLVING, PlaybackPhase.BUFFERING, PlaybackPhase.PLAYING, PlaybackPhase.READY)
-            }.distinctUntilChanged().collect { active -> if (!active) leaveForeground() }
+            }.distinctUntilChanged().collect { active ->
+                // Only clean up an idle preparation notice here. Media3 owns the foreground state
+                // for playable sessions, including buffering and temporary audio-focus suppression.
+                if (!active && sessionPlayer?.playbackState == Player.STATE_IDLE) leaveForeground()
+            }
         }
 
         val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
@@ -78,22 +89,42 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Media3 starts this service again when it publishes a foreground notification.
-        // Keep that notification intact; refreshing it here would trigger another service start.
-        // Media3's internal start intent has no action and already fulfils its foreground deadline.
-        if (intent?.action != null && !isPlaybackOngoing) {
-            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_notification_music).setContentTitle(getString(R.string.app_name))
-                .setContentText(getString(R.string.playback_preparing)).setContentIntent(openPlayer)
-                .setOngoing(true).setCategory(NotificationCompat.CATEGORY_TRANSPORT).build()
-            // Satisfy the platform deadline while parsing or session connection is pending.
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        // A Media3 self-start can arrive after a pause has already removed foreground status.
+        // Every foreground start must meet the platform deadline, including these queued intents.
+        val coordinator = (application as PickAudioApplication).playbackCoordinator
+        try {
+            enterForegroundForStart()
+            if (intent?.action == ACTION_START_PLAYBACK) coordinator.onPlaybackServiceReady()
+        } catch (e: ForegroundServiceStartNotAllowedException) {
+            coordinator.onPlaybackServiceStartFailed(e)
+            stopSelfResult(startId)
+            return START_NOT_STICKY
+        } catch (e: SecurityException) {
+            coordinator.onPlaybackServiceStartFailed(e)
+            stopSelfResult(startId)
+            return START_NOT_STICKY
         }
         val result = super.onStartCommand(intent, flags, startId)
-        val coordinator = (application as PickAudioApplication).playbackCoordinator
-        if (!coordinator.playRequested.value || coordinator.uiState.value.phase in listOf(PlaybackPhase.ERROR, PlaybackPhase.CHOOSE_VERSION, PlaybackPhase.PAUSED))
-            leaveForeground()
+        if (!coordinator.playRequested.value) leaveForeground()
         return result
+    }
+
+    private fun enterForegroundForStart() {
+        // Reuse existing media controls. Calling Media3's notification update here would self-start
+        // the service recursively; direct platform promotion does not schedule another start.
+        val existing = getSystemService(NotificationManager::class.java).activeNotifications
+            .firstOrNull { it.id == NOTIFICATION_ID }?.notification
+        val notification = existing ?: NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification_music).setContentTitle(getString(R.string.app_name))
+            .setContentText(getString(R.string.playback_preparing)).setContentIntent(openPlayer)
+            .setOngoing(true).setCategory(NotificationCompat.CATEGORY_TRANSPORT).build()
+        startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val coordinator = (application as PickAudioApplication).playbackCoordinator
+        // The bootstrap notification is foreground before Media3's controller finishes connecting.
+        if (!coordinator.playRequested.value) super.onTaskRemoved(rootIntent)
     }
 
     private fun leaveForeground() {
