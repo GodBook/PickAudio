@@ -69,7 +69,7 @@ Debug APK：`app/build/outputs/apk/debug/app-debug.apk`。Release 构建默认�
 
 Release已开启R8与资源裁剪。构建版本统一读取version.properties；依赖锁定和SHA-256校验随本轮验收生成。第三方来源与完整许可证见[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，构建同时将准确依赖清单和原始notice放入APK，设置页可离线查看。
 
-正式安装包：[`PickAudio-v1.3.2-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.3.2/PickAudio-v1.3.2-release.apk)，沿用原项目签名，大小约 7.81 MiB，可覆盖旧正式版。更新说明和安装包校验信息见 [v1.3.2 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.3.2)，构建与数据保留验收结果见 [修复与发布记录](docs/BUGFIX-1.3.2.md)。
+正式安装包：[`PickAudio-v1.4.1-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.4.1/PickAudio-v1.4.1-release.apk)，沿用原项目签名，大小约 7.85 MiB，可覆盖旧正式版。更新说明和安装包校验信息见 [v1.4.1 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.4.1)，构建、播放回归及覆盖升级数据保留结果见 [修复与发布记录](docs/BUGFIX-ANDROID16-PLAYBACK.md)。
 
 ## 仓库
 
