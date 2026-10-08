@@ -125,11 +125,6 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
         }
     }.collectAsStateWithLifecycle(initialValue = false)
 
-    // Back handler for full player
-    BackHandler(enabled = showFullPlayer) {
-        showFullPlayer = false
-    }
-
     CompositionLocalProvider(LocalPlayerOverlayVisible provides showFullPlayer) {
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
@@ -281,6 +276,11 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
                     )
                 }
             }
+        }
+
+        // Register after NavHost so a system back event closes the overlay before popping a tab.
+        BackHandler(enabled = showFullPlayer) {
+            showFullPlayer = false
         }
 
         // Animated Full Screen Player Overlay

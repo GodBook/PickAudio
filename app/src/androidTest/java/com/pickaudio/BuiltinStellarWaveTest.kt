@@ -44,7 +44,7 @@ class BuiltinStellarWaveTest {
                 assertEquals(MessageDigest.getInstance("SHA-256").digest(original).joinToString("") { "%02x".format(it) }, source.scriptHash)
                 assertEquals(setOf("tx", "wy", "kw", "kg", "mg"), manager.capabilitiesForSource(source).keys)
                 for (platform in listOf("wy", "tx")) {
-                    assertEquals(source.id, db.sourceDao().getSelectionForPlatform(platform)?.sourceId)
+                    assertEquals(LxSourceManager.defaultSourceId(platform), db.sourceDao().getSelectionForPlatform(platform)?.sourceId)
                     assertEquals(listOf("128k", "320k", "flac"), manager.supportedQualities(platform))
                 }
                 assertEquals(source.id, manager.importSourceFromCode(source.scriptContent).id)
@@ -63,12 +63,12 @@ class BuiltinStellarWaveTest {
             for (platform in listOf("wy", "tx")) db.sourceDao().setPlatformSelection(PlatformSourceSelectionEntity(platform, "builtin_aggregate"))
             LxSourceManager(context, db).use { manager ->
                 manager.ensureBuiltinSources()
-                for (platform in listOf("wy", "tx")) assertEquals(LxSourceManager.BUILTIN_STELLARWAVE_ID, db.sourceDao().getSelectionForPlatform(platform)?.sourceId)
+                for (platform in listOf("wy", "tx")) assertEquals(LxSourceManager.defaultSourceId(platform), db.sourceDao().getSelectionForPlatform(platform)?.sourceId)
                 db.sourceDao().setPlatformSelection(PlatformSourceSelectionEntity("wy", "builtin_aggregate"))
             }
             LxSourceManager(context, db).use { it.ensureBuiltinSources() }
             assertEquals("builtin_aggregate", db.sourceDao().getSelectionForPlatform("wy")?.sourceId)
-            assertEquals(2, db.sourceDao().getAllSources().first().size)
+            assertEquals(3, db.sourceDao().getAllSources().first().size)
         } finally { db.close() }
     }
 
@@ -91,6 +91,22 @@ class BuiltinStellarWaveTest {
                     assertEquals(custom, db.sourceDao().getSourceById(custom.id))
                 }
             }
+        } finally { db.close() }
+    }
+
+    @Test fun qqDefaultUpgradeRunsOnceAndKeepsSubsequentUserChoice() = runBlocking {
+        val db = database()
+        try {
+            db.sourceDao().insertOrUpdate(SourceScriptEntity(LxSourceManager.BUILTIN_STELLARWAVE_ID, "旧星澜",
+                scriptHash = "previous", scriptContent = "previous", capabilitiesJson = "{}"))
+            db.sourceDao().setPlatformSelection(PlatformSourceSelectionEntity("tx", LxSourceManager.BUILTIN_STELLARWAVE_ID))
+            LxSourceManager(context, db).use { manager ->
+                manager.ensureBuiltinSources()
+                assertEquals(LxSourceManager.BUILTIN_QQ_ID, db.sourceDao().getSelectionForPlatform("tx")?.sourceId)
+                manager.selectSourceForPlatform("tx", LxSourceManager.BUILTIN_STELLARWAVE_ID)
+            }
+            LxSourceManager(context, db).use { it.ensureBuiltinSources() }
+            assertEquals(LxSourceManager.BUILTIN_STELLARWAVE_ID, db.sourceDao().getSelectionForPlatform("tx")?.sourceId)
         } finally { db.close() }
     }
 

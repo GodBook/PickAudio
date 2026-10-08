@@ -6,12 +6,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -39,8 +42,9 @@ fun SearchScreen(
     val current by playbackCoordinator.currentTrack.collectAsStateWithLifecycle()
     val playing by playbackCoordinator.isPlaying.collectAsStateWithLifecycle()
     val snack = remember { SnackbarHostState() }
-    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var selecting by remember { mutableStateOf(false) }
+    var selectedIds by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
+    var selecting by rememberSaveable { mutableStateOf(false) }
+    val resultsListState = rememberLazyListState()
     androidx.activity.compose.BackHandler(enabled = selecting && !com.pickaudio.LocalPlayerOverlayVisible.current) { selecting = false; selectedIds = emptySet() }
     var playlistTracks by remember { mutableStateOf<List<Track>?>(null) }
     var downloadTracks by remember { mutableStateOf<List<Track>?>(null) }
@@ -62,6 +66,7 @@ fun SearchScreen(
         selectedIds = emptySet(); selecting = false
         keyboard?.hide()
         searchStateManager.submit(keyword)
+        scope.launch { resultsListState.scrollToItem(0) }
         scope.launch { userPreferences.addSearchHistory(keyword.trim()) }
     }
     fun message(text: String) { scope.launch { snack.showSnackbar(text) } }
@@ -107,7 +112,7 @@ fun SearchScreen(
                     TextButton(onClick = { selected.forEach { playbackCoordinator.addToQueue(it) }; message("已加入队尾") }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.action_add_queue)) }
                 }
             }
-            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 16.dp)) {
+            LazyColumn(Modifier.weight(1f).testTag("search_results"), state = resultsListState, contentPadding = PaddingValues(bottom = 16.dp)) {
                 if (searchStateManager.submittedQuery.isEmpty()) {
                     item {
                         Column(Modifier.padding(20.dp)) {

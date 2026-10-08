@@ -95,6 +95,7 @@ class UiFlowTest {
     @Test fun settingsQualityAndScanSwitchCanBeChanged() {
         start()
         compose.onNodeWithContentDescription("设置").performClick()
+        compose.onNodeWithTag("settings_category_MUSIC").performClick()
         compose.onNodeWithText("标准 128K").performScrollTo().performClick()
         compose.onNodeWithText("Hi-Res 24bit").performClick()
         compose.waitUntil(5000) { runBlocking { app.userPreferences.defaultOnlineQuality.first() } == com.pickaudio.data.model.Quality.FLAC24BIT }

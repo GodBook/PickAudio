@@ -12,6 +12,7 @@ import com.pickaudio.data.db.PlatformSourceSelectionEntity
 import com.pickaudio.data.db.SourceScriptEntity
 import com.pickaudio.data.model.SearchSongItem
 import com.pickaudio.online.AlternativeVersionException
+import com.pickaudio.online.BuiltinQqMusicAdapter
 import com.pickaudio.online.NetEaseSearchAdapter
 import com.pickaudio.online.QqMusicPlaybackAdapter
 import com.pickaudio.online.QqMusicSearchAdapter
@@ -60,8 +61,10 @@ class LxSourceManager(
 ) : Closeable {
     companion object {
         const val BUILTIN_STELLARWAVE_ID = "builtin_stellarwave"
+        const val BUILTIN_QQ_ID = "builtin_qq"
         const val STELLARWAVE_ASSET = "sources/stellarwave-v3.2.0.js"
-        fun isBuiltinSource(sourceId: String) = sourceId in setOf("builtin_aggregate", BUILTIN_STELLARWAVE_ID)
+        fun defaultSourceId(platform: String) = if (platform == "tx") BUILTIN_QQ_ID else BUILTIN_STELLARWAVE_ID
+        fun isBuiltinSource(sourceId: String) = sourceId in setOf("builtin_aggregate", BUILTIN_STELLARWAVE_ID, BUILTIN_QQ_ID)
     }
 
     private val sourceDao = database.sourceDao()
@@ -123,7 +126,7 @@ class LxSourceManager(
     suspend fun supportedQualities(platform: String): List<String> {
         ensureBuiltinSources()
         val selected = sourceDao.getSelectionForPlatform(platform)
-        val id = selected?.sourceId ?: if (selected == null) BUILTIN_STELLARWAVE_ID else return emptyList()
+        val id = selected?.sourceId ?: if (selected == null) defaultSourceId(platform) else return emptyList()
         val source = sourceDao.getSourceById(id) ?: return emptyList()
         return if (source.isEnabled) capabilitiesForSource(source)[platform]?.qualities.orEmpty() else emptyList()
     }
@@ -131,7 +134,10 @@ class LxSourceManager(
     suspend fun testSource(source: SourceScriptEntity) {
         _sourceHealth.value = _sourceHealth.value + (source.id to "正在测试")
         try {
-            if (source.id == "builtin_aggregate") {
+            if (source.id == BUILTIN_QQ_ID) {
+                BuiltinQqMusicAdapter(audioClient(okHttpClient)).resolve("002NkERn2LNVI4", "128k")
+                _sourceHealth.value = _sourceHealth.value + (source.id to "QQ 原曲音频连接正常；歌曲可用性以播放结果为准")
+            } else if (source.id == "builtin_aggregate") {
                 val results = NetEaseSearchAdapter.search("晴天", pageSize = 1)
                 require(results.isNotEmpty()) { "搜索服务暂时未返回结果" }
                 _sourceHealth.value = _sourceHealth.value + (source.id to "搜索连接正常；歌曲可用性以播放结果为准")
@@ -411,10 +417,22 @@ class LxSourceManager(
             database.withTransaction {
                 val firstInstall = sourceDao.getSourceById(BUILTIN_STELLARWAVE_ID) == null
                 if (currentStellarWave?.scriptHash != hash) sourceDao.insertOrUpdate(stellarWave)
-                listOf("wy", "tx").forEach { platform ->
-                    if (firstInstall) sourceDao.replacePlatformSelection(platform, builtinId, BUILTIN_STELLARWAVE_ID)
-                    sourceDao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity(platform, BUILTIN_STELLARWAVE_ID))
+                if (firstInstall) sourceDao.replacePlatformSelection("wy", builtinId, BUILTIN_STELLARWAVE_ID)
+                sourceDao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity("wy", BUILTIN_STELLARWAVE_ID))
+                val firstQqInstall = sourceDao.getSourceById(BUILTIN_QQ_ID) == null
+                if (firstQqInstall) {
+                    sourceDao.insertOrUpdate(SourceScriptEntity(
+                        id = BUILTIN_QQ_ID, name = "拾音 QQ 直连", version = "1.0.0", author = "PickAudio",
+                        description = "按 QQ 原曲编号解析完整音频，支持标准、高品质和 FLAC；校验歌曲身份和音频内容，拒绝试听片段。",
+                        homepage = "https://github.com/GodBook/PickAudio", scriptHash = "builtin_qq_v1",
+                        scriptContent = "// PickAudio native QQ source",
+                        capabilitiesJson = """{"tx":{"platform":"tx","name":"QQ音乐","actions":["musicUrl"],"qualities":["128k","320k","flac"]}}"""))
+                    val previous = sourceDao.getSelectionForPlatform("tx")?.sourceId
+                    if (previous in setOf(builtinId, BUILTIN_STELLARWAVE_ID) && sourceDao.getSourceById(previous!!)?.isEnabled == true) {
+                        sourceDao.replacePlatformSelection("tx", previous, BUILTIN_QQ_ID)
+                    }
                 }
+                sourceDao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity("tx", BUILTIN_QQ_ID))
             }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
@@ -436,14 +454,17 @@ class LxSourceManager(
             withTimeout(15000) {
                 ensureBuiltinSources()
                 val selection = sourceDao.getSelectionForPlatform(platform)
-                val sourceId = selection?.sourceId ?: if (selection == null) BUILTIN_STELLARWAVE_ID else null
+                val sourceId = selection?.sourceId ?: if (selection == null) defaultSourceId(platform) else null
                 if (selection != null && sourceId == null) error("未配置音乐源，请选择支持此平台的音源后重试")
                 val supported = supportedQualities(platform)
                 require(quality in supported) { "当前音源不支持所选音质，请选择：${supported.joinToString()}" }
-                val metadata = platformMetadata(platform, songId, network)
+                val metadata = if (sourceId == BUILTIN_QQ_ID) "{}" else platformMetadata(platform, songId, network)
                 var sourceIdentity = "builtin_aggregate:v132"
                 val url = if (sourceId == null || sourceId == "builtin_aggregate") {
                     resolveBuiltinMusicUrl(platform, songId, quality, title, artist, network, metadata)
+                } else if (sourceId == BUILTIN_QQ_ID) {
+                    sourceIdentity = "$BUILTIN_QQ_ID:v1"
+                    BuiltinQqMusicAdapter(audioClient(okHttpClient, network)).resolve(songId, quality)
                 } else {
                     val source = sourceDao.getSourceById(sourceId) ?: error("音源已移除")
                     sourceIdentity = "$sourceId:${source.scriptHash}"

@@ -3,25 +3,33 @@ package com.pickaudio.ui.screens
 import androidx.compose.ui.res.stringResource
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.pickaudio.PickAudioApplication
 import com.pickaudio.backup.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -36,6 +44,15 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private enum class SettingsSection(val title: String, val icon: ImageVector) {
+    APPEARANCE("外观", Icons.Default.Palette),
+    MUSIC("播放与下载", Icons.Default.Headphones),
+    LYRICS("歌词", Icons.Default.TextFields),
+    STORAGE("存储与缓存", Icons.Default.Storage),
+    BACKUP("备份与恢复", Icons.Default.Backup),
+    ABOUT("关于拾音", Icons.Default.Info)
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -71,8 +88,13 @@ fun SettingsScreen(
     var preview by remember { mutableStateOf<BackupManifest?>(null) }
     var restoreSettings by remember { mutableStateOf(true) }
     var report by remember { mutableStateOf<RestoreReport?>(null) }
+    var section by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
+    val listState = rememberLazyListState()
     val pendingRestores by backupManager.pendingSessions.collectAsStateWithLifecycle(initialValue = emptyList())
     val recoveryStatus by backupManager.recoveryStatus.collectAsStateWithLifecycle()
+    LaunchedEffect(section) { listState.scrollToItem(0) }
+    fun back() { if (!busy && !cacheBusy) { if (section == null) onBack() else section = null } }
+    BackHandler(enabled = !com.pickaudio.LocalPlayerOverlayVisible.current && (section != null || busy || cacheBusy)) { back() }
     fun refresh() { scope.launch { usage = caches.usage() } }
     LaunchedEffect(Unit) { usage = caches.usage() }
     val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
@@ -107,11 +129,39 @@ fun SettingsScreen(
         status = "音频文件已关联，原有歌单和收藏已保留"
     }, { status = it })
     Scaffold(topBar = {
-        TopAppBar(title = { Text(stringResource(com.pickaudio.R.string.settings_title)) }, navigationIcon = { IconButton(onClick = onBack, enabled = !busy && !cacheBusy) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(com.pickaudio.R.string.action_back)) } })
+        TopAppBar(title = { Text(section?.title ?: stringResource(com.pickaudio.R.string.settings_title), fontWeight = FontWeight.SemiBold) },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+            navigationIcon = { IconButton(onClick = ::back, enabled = !busy && !cacheBusy) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(com.pickaudio.R.string.action_back)) } })
     }, modifier = modifier.fillMaxSize()) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding).testTag("settings_list"), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            item {
-                Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_001), style = MaterialTheme.typography.titleMedium)
+        LazyColumn(Modifier.fillMaxSize().padding(padding).testTag("settings_list"), state = listState,
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (section == null) {
+                item {
+                    Text("聆听偏好", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 4.dp))
+                }
+                items(SettingsSection.entries.take(3), key = { it.name }) { category ->
+                    SettingsCategoryRow(category, when (category) {
+                        SettingsSection.APPEARANCE -> "${theme.label} · ${themeColor.label}"
+                        SettingsSection.MUSIC -> "${onlineQuality.label} · ${if (wifiOnly) "仅 Wi-Fi 下载" else "允许移动网络下载"}"
+                        else -> "$lyricSize 号字 · ${if (translation) "显示翻译" else "隐藏翻译"}"
+                    }) { section = category }
+                }
+                item {
+                    Text("应用管理", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                }
+                items(SettingsSection.entries.drop(3), key = { it.name }) { category ->
+                    SettingsCategoryRow(category, when (category) {
+                        SettingsSection.STORAGE -> "缓存占用 ${formatDownloadBytes(usage.audio + usage.covers)}"
+                        SettingsSection.BACKUP -> if (pendingRestores.isEmpty()) "导出备份、恢复与合并" else "${pendingRestores.size} 次恢复待继续"
+                        else -> "v${appUpdateManager.currentVersionName} · 更新与诊断"
+                    }) { section = category }
+                }
+            }
+            when (section) {
+            SettingsSection.APPEARANCE -> item {
+                Text("显示模式", style = MaterialTheme.typography.titleSmall)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { ThemeMode.entries.forEach { mode ->
                     FilterChip(theme == mode, { scope.launch { userPreferences.setThemeMode(mode) } }, label = { Text(mode.label) }, modifier = Modifier.testTag("theme_mode_${mode.name}"))
                 } }
@@ -126,24 +176,34 @@ fun SettingsScreen(
                     }
                 }
             }
-            item {
-                HorizontalDivider(); Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_002), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
-                SettingSwitch("过滤 30 秒以下短音频", "仅影响扫描手机媒体库；手动导入的音频会保留。", filterShort) { scope.launch { userPreferences.setFilterShortAudio(it) } }
+            SettingsSection.MUSIC -> item {
                 QualitySetting("默认在线播放音质", onlineQuality) { scope.launch { userPreferences.setDefaultOnlineQuality(it) } }
                 QualitySetting("默认下载音质", downloadQuality) { scope.launch { userPreferences.setDefaultDownloadQuality(it) } }
                 Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_003), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 SettingSwitch("仅 Wi-Fi 下载", "关闭后允许使用移动网络，新任务会遵循此设置。", wifiOnly) { scope.launch { userPreferences.setWifiOnlyDownload(it) } }
-                ListItem(headlineContent = { Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_004)) }, supportingContent = { Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_005)) }, modifier = Modifier.clickable(onClick = onNavigateToSourceManager))
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                ListItem(headlineContent = { Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_004)) }, supportingContent = { Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_005)) },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, null) },
+                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background), modifier = Modifier.clickable(onClick = onNavigateToSourceManager))
+                SettingSwitch("过滤 30 秒以下短音频", "仅影响扫描手机媒体库；手动导入的音频会保留。", filterShort) { scope.launch { userPreferences.setFilterShortAudio(it) } }
             }
-            item {
-                HorizontalDivider(); Text(stringResource(com.pickaudio.R.string.lyrics_title), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
+            SettingsSection.LYRICS -> item {
                 Text("字号 · $lyricSize")
                 Slider(lyricSize.toFloat(), { scope.launch { userPreferences.setLyricFontSize(it.toInt()) } }, valueRange = 14f..28f, steps = 13)
+                Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp)) {
+                    Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("把喜欢的旋律留在身边", fontSize = lyricSize.sp, color = MaterialTheme.colorScheme.primary)
+                        if (translation) Text("Keep your favorite melodies close", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp))
+                    }
+                }
                 SettingSwitch("显示歌词翻译", "有翻译时在原文下方显示。", translation) { scope.launch { userPreferences.setShowLyricTranslation(it) } }
             }
-            item {
-                HorizontalDivider(); Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_006), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
-                Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_007), style = MaterialTheme.typography.bodySmall)
+            SettingsSection.STORAGE -> item {
+                Text("${formatDownloadBytes(usage.audio + usage.covers)}", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+                Text("音频与封面缓存", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 24.dp))
                 Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_008))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(64, 256, 1024).forEach { size ->
@@ -166,14 +226,9 @@ fun SettingsScreen(
                     scope.launch { cacheBusy = true; try { caches.clearUnusedParts(); usage = caches.usage(); status = "无任务的临时文件已清理" } finally { cacheBusy = false } }
                 }
                 TextButton(onClick = ::refresh, enabled = !cacheBusy) { Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_009)) }
-                TextButton(onClick = { showLicenses = true }) { Text(stringResource(com.pickaudio.R.string.third_party_title)) }
-                TextButton(onClick = { diagnosticsPicker.launch("PickAudio-diagnostics.json") }) { Text(stringResource(com.pickaudio.R.string.diagnostics_export)) }
-                Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_010), style = MaterialTheme.typography.titleSmall)
-                Text("播放 ${metrics.plays} 次 · 最近首播 ${metrics.firstAudioMs?.let { "$it ms" } ?: "未测量"}\n缓冲 ${metrics.buffers} 次 · 解析失败 ${metrics.resolveFailures} 次 · 音频缓存字节占比 ${metrics.cachePercent}%")
-                Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_011), style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_007), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            item {
-                HorizontalDivider(); Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_012), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
+            SettingsSection.BACKUP -> item {
                 Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_013), style = MaterialTheme.typography.bodyMedium)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { exportPicker.launch("PickAudio_Backup_${SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.getDefault()).format(Date())}.zip") }, enabled = !busy) { Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_014)) }
@@ -198,12 +253,23 @@ fun SettingsScreen(
                     }
                 }
             }
-            item {
-                HorizontalDivider(); Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_017), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
-                Text("拾音 v${appUpdateManager.currentVersionName}")
+            SettingsSection.ABOUT -> item {
+                Text("拾音 PickAudio", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                Text("v${appUpdateManager.currentVersionName}", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+                Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_019), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp, bottom = 16.dp))
                 TextButton(onClick = { scope.launch { appUpdateManager.checkForUpdates() } }) { Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_018)) }
-                Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_019), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(onClick = { showLicenses = true }) { Text(stringResource(com.pickaudio.R.string.third_party_title)) }
+                HorizontalDivider(Modifier.padding(vertical = 20.dp))
+                Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_010), style = MaterialTheme.typography.titleSmall)
+                Text("播放 ${metrics.plays} 次 · 最近首播 ${metrics.firstAudioMs?.let { "$it ms" } ?: "未测量"}\n缓冲 ${metrics.buffers} 次 · 解析失败 ${metrics.resolveFailures} 次 · 音频缓存字节占比 ${metrics.cachePercent}%",
+                    style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp))
+                Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_011), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp))
+                TextButton(onClick = { diagnosticsPicker.launch("PickAudio-diagnostics.json") }) { Text(stringResource(com.pickaudio.R.string.diagnostics_export)) }
             }
+            null -> Unit
+            }
+            if (section != SettingsSection.BACKUP && status != null) item { Text(status!!, style = MaterialTheme.typography.bodyMedium) }
         }
     }
     preview?.let { manifest ->
@@ -249,6 +315,22 @@ fun SettingsScreen(
 }
 
 @Composable
+private fun SettingsCategoryRow(section: SettingsSection, summary: String, onClick: () -> Unit) {
+    Surface(onClick = onClick, shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier.fillMaxWidth().testTag("settings_category_${section.name}")) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(section.icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+            Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
+                Text(section.title, style = MaterialTheme.typography.titleSmall)
+                Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp))
+            }
+            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+@Composable
 private fun SettingSwitch(title: String, description: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) { Text(title); Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -272,8 +354,8 @@ private fun QualitySetting(title: String, selected: Quality, onSelect: (Quality)
 
 @Composable
 private fun CacheRow(title: String, size: String, busy: Boolean, available: Boolean, onClear: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Text(title); Text(size, style = MaterialTheme.typography.bodySmall)
+    Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) { Text(title); Text(size, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         TextButton(onClick = onClear, enabled = !busy && available) { Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_026)) }
     }
 }
