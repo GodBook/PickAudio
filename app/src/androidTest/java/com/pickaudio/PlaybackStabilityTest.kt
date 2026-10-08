@@ -38,6 +38,51 @@ import java.util.concurrent.TimeUnit
 class PlaybackStabilityTest {
     private val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as PickAudioApplication
 
+    @Test fun silentRemoteStallRecoversSameEntryWithoutTransportError() = runBlocking {
+        withPlayingFixture { coordinator, scenario, audio ->
+            val gate = CountDownLatch(1)
+            val boundary = 44 + 8000 * 2 * 3
+            val entry = coordinator.queueEntries.value.single().id
+            val factory = DataSource.Factory {
+                val delegate = ByteArrayDataSource(audio)
+                object : DataSource by delegate {
+                    private var offset = 0L
+                    override fun open(dataSpec: DataSpec): Long {
+                        offset = dataSpec.position
+                        return delegate.open(dataSpec)
+                    }
+                    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                        if (this.offset >= boundary) {
+                            try { gate.await() } catch (_: InterruptedException) { throw java.io.InterruptedIOException() }
+                        }
+                        return delegate.read(buffer, offset,
+                            if (this.offset < boundary) minOf(length, (boundary - this.offset).toInt()) else length).also {
+                            if (it != C.RESULT_END_OF_INPUT) this.offset += it
+                        }
+                    }
+                    override fun close() { gate.countDown(); delegate.close() }
+                }
+            }
+            try {
+                withContext(Dispatchers.Main) {
+                    val media = coordinator.player.currentMediaItem!!.buildUpon().setUri("https://fixture.invalid/stall.wav").build()
+                    coordinator.player.setMediaSource(ProgressiveMediaSource.Factory(factory).createMediaSource(media))
+                    coordinator.player.prepare()
+                }
+                await { coordinator.isPlaying.value && coordinator.currentPositionMs.value > 500 }
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                withTimeout(40_000) {
+                    while (!withContext(Dispatchers.Main) {
+                        coordinator.isPlaying.value && coordinator.player.currentMediaItem?.localConfiguration?.uri?.scheme == "file"
+                    }) delay(100)
+                }
+                assertEquals(entry, coordinator.queueEntries.value.single().id)
+                assertTrue(coordinator.currentPositionMs.value >= 1000)
+                assertTrue(serviceIsForeground())
+            } finally { gate.countDown() }
+        }
+    }
+
     private suspend fun await(condition: () -> Boolean) = withTimeout(20_000) {
         while (!withContext(Dispatchers.Main) { condition() }) delay(50)
     }
