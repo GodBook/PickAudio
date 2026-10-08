@@ -6,6 +6,11 @@ import com.pickaudio.network.withResponse
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.delay
+import java.io.IOException
 
 /** Resolve the requested QQ recording, and check that the CDN actually serves audio. */
 internal class BuiltinQqMusicAdapter(
@@ -23,16 +28,31 @@ internal class BuiltinQqMusicAdapter(
         val request = Request.Builder().url(endpoint.toHttpUrl().newBuilder()
             .addQueryParameter("mid", songMid).addQueryParameter("quality", level.toString()).build())
             .header("User-Agent", "Mozilla/5.0").build()
-        val url = client.withResponse(request) { response ->
-            check(response.isSuccessful) { "QQ 音源服务返回 ${response.code}" }
-            parseUrl(response.body?.readLimitedText(256 * 1024) ?: error("QQ 音源响应为空"), songMid)
+        // The backend can return a transient 110000/500011 for a valid recording.
+        // Retry that same MID/quality once; never silently choose another song or quality.
+        repeat(2) { attempt ->
+            try {
+                val url = client.withResponse(request) { response ->
+                    if (response.code in listOf(408, 500, 502, 503, 504))
+                        throw IOException("QQ 音源服务暂时不可用（${response.code}）")
+                    check(response.isSuccessful) { "QQ 音源服务返回 ${response.code}" }
+                    parseUrl(response.body?.readLimitedText(256 * 1024) ?: error("QQ 音源响应为空"), songMid)
+                }
+                verifyAudio(url)
+                return url
+            } catch (e: CancellationException) { throw e }
+            catch (e: IOException) {
+                currentCoroutineContext().ensureActive()
+                if (attempt == 1) throw e
+                delay(400)
+            }
         }
-        verifyAudio(url)
-        return url
+        error("QQ 音源暂不可用")
     }
 
     internal fun parseUrl(body: String, songMid: String): String {
         val root = JsonParser.parseString(body).asJsonObject
+        if (root.get("code")?.asInt == 110000) throw IOException("QQ 音源后端暂时异常，请稍后重试")
         check(root.get("code")?.asInt == 0) { "QQ 音源暂未提供此歌曲，请稍后重试或换源" }
         val data = root.getAsJsonObject("data") ?: error("QQ 音源没有返回歌曲")
         check(data.get("songMID")?.asString == songMid) { "QQ 音源返回了其他歌曲，已停止播放" }

@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import org.json.JSONArray
+import android.app.ActivityManager
 
 /** Explicit local export, with aggregate counters and no song, URI, script or credential data. */
 object DiagnosticReport {
@@ -18,6 +20,18 @@ object DiagnosticReport {
         val report = JSONObject().apply {
             put("version", BuildConfig.VERSION_NAME); put("versionCode", BuildConfig.VERSION_CODE)
             put("sdk", Build.VERSION.SDK_INT); put("schema", database.openHelper.readableDatabase.version)
+            put("manufacturer", Build.MANUFACTURER); put("model", Build.MODEL)
+            // OS-retained exit categories survive process death; do not export traces/URLs.
+            put("recentProcessExits", JSONArray().apply {
+                context.getSystemService(ActivityManager::class.java)
+                    .getHistoricalProcessExitReasons(context.packageName, 0, 5).forEach { exit ->
+                        put(JSONObject().apply {
+                            put("timestamp", exit.timestamp); put("reason", exit.reason)
+                            put("status", exit.status); put("importance", exit.importance)
+                            put("pssKiB", exit.pss); put("rssKiB", exit.rss)
+                        })
+                    }
+            })
             put("tracks", database.trackDao().getTrackCount())
             put("cacheLimitMiB", preferences.audioCacheMegabytes.first())
             put("cacheBytes", AudioCacheManager.size(context))

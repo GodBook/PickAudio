@@ -51,6 +51,40 @@ class QqPlaybackFailureTest {
     private fun serviceIsRunning() = app.getSystemService(ActivityManager::class.java).getRunningServices(100)
         .any { it.service.className == PlaybackService::class.java.name }
 
+    @Suppress("DEPRECATION")
+    private fun serviceIsForeground() = app.getSystemService(ActivityManager::class.java).getRunningServices(100)
+        .any { it.service.className == PlaybackService::class.java.name && it.foreground }
+
+    @Test fun automaticFailedQqTrackKeepsForegroundUntilNextTrackAndPauseCancelsSkip() = runBlocking {
+        withFailureFixture { coordinator, local ->
+            val failed = coordinator.currentTrack.value!!
+            val mode = coordinator.playbackMode.value
+            try {
+                withContext(Dispatchers.Main) {
+                    coordinator.setPlaybackMode(com.pickaudio.data.model.PlaybackMode.SEQUENTIAL)
+                    coordinator.setQueueAndPlay(listOf(local, failed, local))
+                }
+                await { coordinator.isPlaying.value }
+                compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                withContext(Dispatchers.Main) { coordinator.seekTo(89_700) }
+                await { coordinator.currentIndex.value == 1 && coordinator.uiState.value.message == "当前歌曲暂不可用，正在播放下一首" }
+                assertTrue("Failed automatic track must retain playback intent", coordinator.playRequested.value)
+                assertTrue("Failure gap must not demote the foreground service", serviceIsForeground())
+                await { coordinator.currentIndex.value == 2 && coordinator.isPlaying.value }
+                withContext(Dispatchers.Main) { coordinator.playQueueItem(0, 89_700) }
+                await { coordinator.currentIndex.value == 1 && coordinator.uiState.value.message == "当前歌曲暂不可用，正在播放下一首" }
+                withContext(Dispatchers.Main) { coordinator.pause() }
+                delay(2000)
+                assertEquals(1, coordinator.currentIndex.value)
+                assertFalse(coordinator.playRequested.value)
+                assertFalse(coordinator.isPlaying.value)
+            } finally {
+                compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                withContext(Dispatchers.Main) { coordinator.setPlaybackMode(mode) }
+            }
+        }
+    }
+
     private suspend fun withFailureFixture(pending: Boolean = false, block: suspend (PlaybackCoordinator, Track) -> Unit) {
         app.sourceManager.ensureBuiltinSources()
         val previous = app.database.sourceDao().getSelectionForPlatform("tx")!!

@@ -163,6 +163,7 @@ class PlaybackCoordinator(
     private var automaticTrack = false
     private var skipJob: Job? = null
     private var recoveryJob: Job? = null
+    private var stallMonitorJob: Job? = null
     private var streamRecoveryAttempts = 0
 
     init {
@@ -206,7 +207,6 @@ class PlaybackCoordinator(
             if (state == Player.STATE_BUFFERING) PlaybackDiagnostics.buffering()
             if (state == Player.STATE_READY) {
                 _durationMs.value = player.duration.coerceAtLeast(0L)
-                consecutiveFailures = 0
                 val format = player.audioFormat
                 val mime = format?.sampleMimeType.orEmpty()
                 val header = format?.initializationData?.firstNotNullOfOrNull { AudioFormatProbe.detect(it) } ?: resolvedAudioInfo
@@ -224,9 +224,8 @@ class PlaybackCoordinator(
                 _uiState.value = _uiState.value.copy(phase = if (player.playWhenReady) PlaybackPhase.PLAYING else PlaybackPhase.READY,
                     actualQuality = info.label, message = info.qualityNotice(_uiState.value.requestedQuality))
                 if (failure != null) {
+                    failCurrentTrack("$failure，请更换音质或音源")
                     player.stop()
-                    _playRequested.value = false
-                    _uiState.value = _uiState.value.copy(phase = PlaybackPhase.ERROR, message = "$failure，请更换音质或音源")
                 }
             } else if (state == Player.STATE_BUFFERING && _uiState.value.phase != PlaybackPhase.RESOLVING) {
                 _uiState.value = _uiState.value.copy(phase = PlaybackPhase.BUFFERING)
@@ -236,13 +235,41 @@ class PlaybackCoordinator(
         }
 
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-            Log.e("PlaybackCoordinator", "ExoPlayer playback error: ${error.errorCodeName}", error)
-            _isPlaying.value = false
-            if (recoverStream(error)) return
-            _playRequested.value = false
-            consecutiveFailures++
-            _uiState.value = _uiState.value.copy(phase = PlaybackPhase.ERROR, message = "无法播放这首歌，请检查网络、文件授权或切换音源后重试")
-            skipFailedAutomaticTrack()
+            // Errors queued by a replaced/stopped stream must not overwrite the new resolution.
+            if (_uiState.value.phase == PlaybackPhase.RESOLVING) return
+            handlePlaybackFailure(error)
+        }
+    }
+
+    private fun handlePlaybackFailure(error: androidx.media3.common.PlaybackException) {
+        Log.e("PlaybackCoordinator", "ExoPlayer playback error: ${error.errorCodeName}", error)
+        _isPlaying.value = false
+        if (recoverStream(error)) return
+        failCurrentTrack("无法播放这首歌，请检查网络、文件授权或切换音源后重试")
+    }
+
+    private fun startStallMonitor(generation: Long) {
+        stallMonitorJob?.cancel()
+        stallMonitorJob = scope.launch {
+            val monitor = PlaybackStallMonitor()
+            while (isActive && generation == requestGeneration) {
+                val current = playerInstance ?: break
+                val buffering = current.playbackState == Player.STATE_BUFFERING
+                val active = _playRequested.value &&
+                    current.currentMediaItem?.localConfiguration?.uri?.scheme in listOf("http", "https") &&
+                    current.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE &&
+                    (buffering || current.isPlaying) &&
+                    _uiState.value.phase !in listOf(PlaybackPhase.RESOLVING, PlaybackPhase.ERROR)
+                if (monitor.stalled(SystemClock.elapsedRealtime(), active, buffering,
+                        current.currentPosition, current.bufferedPosition)) {
+                    handlePlaybackFailure(androidx.media3.common.PlaybackException(
+                        "音频连接长时间没有播放进展", null,
+                        androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT))
+                    current.stop()
+                    break
+                }
+                delay(500)
+            }
         }
     }
 
@@ -274,6 +301,7 @@ class PlaybackCoordinator(
                     if (_isPlaying.value) {
                         _currentPositionMs.value = player.currentPosition.coerceAtLeast(0L)
                         _durationMs.value = player.duration.coerceAtLeast(0L)
+                        if (_currentPositionMs.value >= 1000) consecutiveFailures = 0
                     }
                 } catch (e: Exception) {
                     Log.w("PlaybackCoordinator", "Error updating progress ticker: ${e.message}")
@@ -486,6 +514,7 @@ class PlaybackCoordinator(
     }
 
     fun pause() {
+        stallMonitorJob?.cancel()
         _playRequested.value = false
         requestJob?.cancel()
         requestGeneration++
@@ -523,7 +552,10 @@ class PlaybackCoordinator(
                 try {
                     ensurePlaybackService()
                     ensureActive()
-                    if (generation == requestGeneration && _playRequested.value) player.play()
+                    if (generation == requestGeneration && _playRequested.value) {
+                        player.play()
+                        startStallMonitor(generation)
+                    }
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
                     if (generation == requestGeneration) onPlaybackServiceStartFailed(e)
@@ -634,6 +666,7 @@ class PlaybackCoordinator(
         skipJob?.cancel()
         recoveryJob?.cancel()
         if (!recovering) streamRecoveryAttempts = 0
+        stallMonitorJob?.cancel()
         automaticTrack = automatic
         if (!automatic) { consecutiveFailures = 0 }
         val generation = ++requestGeneration
@@ -646,11 +679,13 @@ class PlaybackCoordinator(
         PlaybackDiagnostics.begin()
         _uiState.value = PlaybackUiState(PlaybackPhase.RESOLVING, requestedQuality = requestedQuality)
         _playRequested.value = autoPlay
-        player.stop()
-        player.playWhenReady = false
 
         requestJob = scope.launch {
             try {
+                // Player creation and reset can fail too (audio service/decoder/cache failures).
+                // Keep them inside the same error boundary as resolution and preparation.
+                player.stop()
+                player.playWhenReady = false
                 if (_playRequested.value) ensurePlaybackService()
                 val mapping = withContext(Dispatchers.IO) { ensureTracksPersisted(listOf(track)) }
                 ensureActive()
@@ -680,6 +715,7 @@ class PlaybackCoordinator(
                 player.seekTo(_currentPositionMs.value)
                 player.playWhenReady = _playRequested.value
                 _uiState.value = _uiState.value.copy(phase = PlaybackPhase.BUFFERING)
+                startStallMonitor(generation)
             } catch (e: CancellationException) { throw e }
             catch (e: AlternativeVersionException) {
                 if (generation == requestGeneration) {
@@ -691,24 +727,31 @@ class PlaybackCoordinator(
                 Log.e("PlaybackCoordinator", "Failed to play track: ${track.title}", e)
                 if (generation == requestGeneration) {
                     PlaybackDiagnostics.failed(e.javaClass.simpleName)
-                    _playRequested.value = false
-                    consecutiveFailures++
-                    _uiState.value = _uiState.value.copy(phase = PlaybackPhase.ERROR, message = e.message ?: "无法获取歌曲，请重试或更换音源")
+                    failCurrentTrack(e.message ?: "无法获取歌曲，请重试或更换音源")
                     _isPlaying.value = false
-                    player.stop()
-                    skipFailedAutomaticTrack()
+                    runCatching { playerInstance?.stop() }
                 }
             }
         }
         saveSnapshot()
     }
 
-    private fun skipFailedAutomaticTrack() {
-        if (!automaticTrack || _queue.value.size < 2 || consecutiveFailures >= 3) { return }
+    private fun failCurrentTrack(message: String) {
+        consecutiveFailures++
+        if (!automaticTrack || _queue.value.size < 2 || consecutiveFailures >= 3 ||
+            (_playbackMode.value == PlaybackMode.SEQUENTIAL && _currentIndex.value == _queue.value.lastIndex)) {
+            _uiState.value = _uiState.value.copy(phase = PlaybackPhase.ERROR, message = message)
+            _playRequested.value = false
+            return
+        }
+        // The queue is still playing. Dropping foreground status during this delay makes the
+        // next background service/audio-focus request fail on Android 15+ and some OEMs.
+        _uiState.value = _uiState.value.copy(phase = PlaybackPhase.RESOLVING, message = "当前歌曲暂不可用，正在播放下一首")
+        _playRequested.value = true
         val generation = requestGeneration
         skipJob = scope.launch {
             delay(1000)
-            if (generation == requestGeneration && _uiState.value.phase == PlaybackPhase.ERROR) { advanceNext(true) }
+            if (generation == requestGeneration && _playRequested.value) { advanceNext(true) }
         }
     }
 
@@ -894,6 +937,7 @@ class PlaybackCoordinator(
     }
 
     fun onServiceDestroyed() {
+        stallMonitorJob?.cancel()
         serviceStart?.cancel(CancellationException("Playback service destroyed"))
         serviceStart = null
         sleepTimerJob?.cancel()

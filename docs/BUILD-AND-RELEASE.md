@@ -58,7 +58,7 @@ adb -s emulator-5560 shell am start -W -n com.pickaudio/.MainActivity --ez open_
 
 ## 发布检查
 
-Release默认为未签名构建。沿用原项目证书签名；本次提升至1.4.3/code 16，核验公开1.4.2/code 15的覆盖安装。先完成本地覆盖安装与数据保留验证，再检查远端CI并发布；实体蓝牙、TalkBack和实体升级记录按实际验证范围记录。
+Release默认为未签名构建。沿用原项目证书签名；本次提升至1.4.4/code 17，核验公开1.4.3/code 16的覆盖安装。先完成本地覆盖安装与数据保留验证，再检查远端CI并发布；实体蓝牙、TalkBack和实体升级记录按实际验证范围记录。
 
 ```powershell
 ./scripts/verify-release.ps1 -ApkPath <signed-apk> -PreviousVersionCode 13 -ExpectedCertificateSha256 <original-certificate-sha256> -SdkPath D:/dev/android-sdk -ChangelogPath <release-notes> -OutputDirectory app/build/release-candidate

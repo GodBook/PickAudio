@@ -2,9 +2,9 @@
 
 Android 本地与在线音乐播放器，使用 Kotlin、Jetpack Compose、Room、Media3 和内嵌 QuickJS。无账号设计，歌单、收藏和设置在设备上保存。
 
-当前源码为 v1.4.3/code 16，新增按 QQ 原曲编号解析并检查音频的「拾音 QQ 直连」默认源，设置改为六个分类页面，搜索试听后返回原结果页并保留滚动位置，见 [更新说明](docs/RELEASE-1.4.3.md)。保留 Android 16 播放恢复、星澜聚合备用源和六种可保存的主题配色。歌曲可用性仍受平台授权与音源后端影响。
+当前源码为 v1.4.4/code 17，修复 QQ 直连临时后端错误直接结束试听、在线音频无限缓冲及自动跳过失败歌曲时后台播放中断的问题；播放器初始化异常转为可重试错误，诊断导出增加系统进程退出类别，见 [更新说明](docs/RELEASE-1.4.4.md)。保留 QQ 原曲直连、分类设置、搜索结果与滚动位置、六种主题配色。歌曲可用性仍受平台授权与音源后端影响。
 
-v1.4.3 的 74 项 JVM 测试、Debug／裁剪验证版各 82 项 API 36 设备测试，以及原签名覆盖升级验证通过；两首真实 QQ 样本的三档音频分段请求通过，具体范围见 [验证记录](docs/VALIDATION-1.4.3.md)。
+v1.4.4 的 80 项 JVM 测试、Debug／裁剪验证版各 84 项 API 36 设备测试、原签名覆盖升级及正式包后台自然切歌/循环验证通过。《青花瓷》标准、高品质和 FLAC 三档真实音频起播与拖动通过；尚未在 iQOO Z10 Turbo 实体机复验，具体范围见 [验证记录](docs/VALIDATION-1.4.4.md)。v1.4.3 的历史结果见 [原验证记录](docs/VALIDATION-1.4.3.md)。
 
 v1.4.2 的 71 项 JVM 单测、14 项本地专项，以及 GitHub Debug／裁剪验证变体各 79 项 API 36 设备测试全部通过。原签名 1.4.1→1.4.2 覆盖升级保留设置、歌单、收藏、队列、进度及暂停下载，实际生产包的后台播放与自然切歌已复验，见 [QQ 修复与验证记录](docs/BUGFIX-QQ-PLAYBACK-1.4.2.md)。
 
@@ -75,7 +75,7 @@ Debug APK：`app/build/outputs/apk/debug/app-debug.apk`。Release 构建默认�
 
 Release已开启R8与资源裁剪。构建版本统一读取version.properties；依赖锁定和SHA-256校验随本轮验收生成。第三方来源与完整许可证见[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，构建同时将准确依赖清单和原始notice放入APK，设置页可离线查看。
 
-正式安装包：[`PickAudio-v1.4.3-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.4.3/PickAudio-v1.4.3-release.apk)，沿用原项目签名，大小约 7.86 MiB，可覆盖旧正式版。更新说明和安装包校验信息见 [v1.4.3 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.4.3)，构建、设备回归与覆盖升级数据保留结果见 [验证记录](docs/VALIDATION-1.4.3.md)。
+正式安装包：[`PickAudio-v1.4.4-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.4.4/PickAudio-v1.4.4-release.apk)，沿用原项目签名，大小约 7.86 MiB，可覆盖旧正式版。更新说明和安装包校验信息见 [v1.4.4 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.4.4)，构建、设备回归与覆盖升级数据保留结果见 [验证记录](docs/VALIDATION-1.4.4.md)。
 
 ## 仓库
 
