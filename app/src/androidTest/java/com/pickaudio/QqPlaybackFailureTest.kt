@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.pickaudio.data.db.LocalAssetEntity
 import com.pickaudio.data.model.PlaybackPhase
 import com.pickaudio.data.model.Quality
 import com.pickaudio.data.model.SearchSongItem
@@ -74,6 +75,8 @@ class QqPlaybackFailureTest {
             }.array())
             app.database.ensureTrackIdentity(qq)
             app.database.ensureTrackIdentity(local)
+            app.database.localAssetDao().insertOrUpdate(LocalAssetEntity(trackId = local.id, uri = local.localUri!!,
+                sourceType = "SAF_FILE", fileSize = wave.length(), mimeType = "audio/wav", format = "wav"))
             app.sourceManager.selectSourceForPlatform("tx", source.id)
             app.userPreferences.setDefaultOnlineQuality(Quality.Q128K)
             withContext(Dispatchers.Main) { coordinator.setQueueAndPlay(listOf(qq)) }

@@ -195,6 +195,8 @@ fun PlayerScreen(
                     LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
                     Text(state.phase.label, style = MaterialTheme.typography.bodySmall)
                 }
+              }
+                // Keep recovery actions visible even when artwork and metadata need scrolling.
                 if (state.phase == PlaybackPhase.ERROR || state.phase == PlaybackPhase.CHOOSE_VERSION) Surface(
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp), shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.surfaceContainer) {
@@ -209,7 +211,6 @@ fun PlayerScreen(
                         }
                     }
                 }
-              }
                 var dragPosition by remember(song.id) { mutableStateOf<Float?>(null) }
                 val progressLabel = stringResource(com.pickaudio.R.string.playback_progress)
                 Slider(value = dragPosition ?: if (duration > 0) (progress.toFloat() / duration).coerceIn(0f, 1f) else 0f,
