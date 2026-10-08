@@ -46,3 +46,5 @@
 另对实际签名生产包执行冷启动恢复、界面播放按钮、回到桌面后的自然切歌和列表循环，均通过；服务保持前台，媒体会话显示实际正在播放的曲目。`smoke-background-second.txt`、`smoke-background-loop.txt`、`smoke-services.txt` 与 `smoke-result.txt` 保留证据，夹具已清理。测试脚本适配了 Android 16 媒体会话将状态显示为 `PLAYING(3)` 的格式。
 
 正式 APK 已校验版本、签名、双 ABI 与 ZIP/ELF 16 KiB 对齐。大小 8,242,461 字节，SHA-256：`eb320e88775974b1b1e4b781e201b618b50040f6fa053d518ae2473afc45f6d5`；证书 SHA-256：`1e564b554f48b6a69d80e6d76c704e8b16e9a600d2511205754839c729d4a281`。
+
+修复经 [PR #4](https://github.com/GodBook/PickAudio/pull/4) 合入 main，[v1.4.4 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.4.4) 已公开发布为最新版本，包含 APK、SHA256SUMS.txt 和 version.json。上传后回下载的 APK 大小、SHA-256 与版本元数据一致，根目录更新元数据已同步。[PR 对应 CI](https://github.com/GodBook/PickAudio/actions/runs/37763974584) 的构建、Debug 与裁剪验证组也全部通过。

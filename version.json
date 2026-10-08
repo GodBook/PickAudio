@@ -1,10 +1,10 @@
 {
-  "versionCode": 16,
-  "versionName": "1.4.3",
-  "changelog": "1. 新增内置 QQ 直连音源，按原曲编号解析并检查真实音频，拒绝试听片段和错误歌曲。\n2. 设置重排为六个分类页面，显示当前值摘要，增加歌词字号预览。\n3. 搜索试听后返回原结果页，保留查询、平台和滚动位置。\n4. 原签名安装包约 7.86 MiB，已验证覆盖升级保留设置、歌单、收藏、队列、进度和暂停下载。\nQQ 曲目可用性以外部服务、平台授权和实际网络为准。",
-  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.4.3/PickAudio-v1.4.3-release.apk",
-  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.4.3",
+  "versionCode": 17,
+  "versionName": "1.4.4",
+  "changelog": "1. QQ 直连临时后端错误按同一原曲、同一音质限次重试。\n2. 在线播放长期没有进展时按原进度恢复，避免无限缓冲。\n3. 连续播放跳过失败歌曲时保留后台播放状态，暂停会取消自动恢复和跳歌。\n4. 播放器创建和重置异常转为可重试错误，诊断导出增加系统进程退出原因。\n5. 原签名覆盖升级验证通过；歌单、收藏、设置、队列、进度和暂停下载保留。\n已验证《青花瓷》三档音频起播及拖动。未在 iQOO Z10 Turbo 实体机复验，歌曲可用性仍受外部服务及网络影响。",
+  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.4.4/PickAudio-v1.4.4-release.apk",
+  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.4.4",
   "apkSize": 8242461,
-  "sha256": "cad5db5fff582b5006db747a4afe07df22ec02b59ffec7d6c0b4f45a3ba09e2f",
+  "sha256": "eb320e88775974b1b1e4b781e201b618b50040f6fa053d518ae2473afc45f6d5",
   "publishTime": "2026-10-08"
 }
