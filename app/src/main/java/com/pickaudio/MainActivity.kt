@@ -278,17 +278,15 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
             }
         }
 
-        // Register after NavHost so a system back event closes the overlay before popping a tab.
-        BackHandler(enabled = showFullPlayer) {
-            showFullPlayer = false
-        }
-
         // Animated Full Screen Player Overlay
         AnimatedVisibility(
             visible = showFullPlayer,
             enter = slideInVertically(initialOffsetY = { it }),
             exit = slideOutVertically(targetOffsetY = { it })
         ) {
+            // Register with the overlay's lifetime, after the destination's back callback exists.
+            // NavHost can register that callback later through subcomposition.
+            BackHandler(enabled = showFullPlayer) { showFullPlayer = false }
             Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 PlayerScreen(
                     coordinator = coordinator,
