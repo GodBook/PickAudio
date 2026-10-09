@@ -1,10 +1,10 @@
 {
-  "versionCode": 17,
-  "versionName": "1.4.4",
-  "changelog": "1. QQ 直连临时后端错误按同一原曲、同一音质限次重试。\n2. 在线播放长期没有进展时按原进度恢复，避免无限缓冲。\n3. 连续播放跳过失败歌曲时保留后台播放状态，暂停会取消自动恢复和跳歌。\n4. 播放器创建和重置异常转为可重试错误，诊断导出增加系统进程退出原因。\n5. 原签名覆盖升级验证通过；歌单、收藏、设置、队列、进度和暂停下载保留。\n已验证《青花瓷》三档音频起播及拖动。未在 iQOO Z10 Turbo 实体机复验，歌曲可用性仍受外部服务及网络影响。",
-  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.4.4/PickAudio-v1.4.4-release.apk",
-  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.4.4",
+  "versionCode": 18,
+  "versionName": "1.4.5",
+  "changelog": "1. 修复随机播放时歌曲停止、应用无响应的问题，消除播放列表遍历环路。\n2. 改善随机切歌、媒体控制器、重复歌曲条目和队列编辑的稳定性。\n3. 手动选择随机队列中的歌曲后，避免紧接着重复选中当前条目。\n4. 原签名覆盖升级验证通过，保留歌单、收藏、设置、歌词校准、队列、进度和暂停下载。\n已在 Android 16 专用模拟器验证连续随机切歌、后台播放及暂停/恢复，尚未在用户实体机复验。",
+  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.4.5/PickAudio-v1.4.5-release.apk",
+  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.4.5",
   "apkSize": 8242461,
-  "sha256": "eb320e88775974b1b1e4b781e201b618b50040f6fa053d518ae2473afc45f6d5",
-  "publishTime": "2026-10-08"
+  "sha256": "4cbc3eef20aeb2a7eec73e4cac12958918d806f76c9f78cb05bf5551178e4d49",
+  "publishTime": "2026-10-09"
 }

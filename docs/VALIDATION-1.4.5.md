@@ -28,4 +28,20 @@
 - SHA-256：`4cbc3eef20aeb2a7eec73e4cac12958918d806f76c9f78cb05bf5551178e4d49`。
 - 签名证书 SHA-256：`1e564b554f48b6a69d80e6d76c704e8b16e9a600d2511205754839c729d4a281`。
 
-设备回归、覆盖升级和公开发布结果将在完成后补入本记录。模拟器结果不等同于 OEM 实体机验收。
+## GitHub 回归
+
+功能提交 `58564e0e8610a528a3cefdc2be0f124f6bf27b0f` 的 [PR CI](https://github.com/GodBook/PickAudio/actions/runs/37925482466) 和 [分支 CI](https://github.com/GodBook/PickAudio/actions/runs/37925472845) 全部通过。构建、单测、Lint 和 schema 检查成功；Debug 和 R8 裁剪验证变体各 **90 项设备测试**，失败与跳过均为零。PR 的两组完整报告已下载到本地 `ci-debug/` 和 `ci-validation/`，成功率均为 100%。
+
+## 原签名升级及生产包播放
+
+原签名 1.4.4/code 17 → 1.4.5/code 18 覆盖安装通过。UID、偏好文件字节、歌曲原平台标识、歌单/收藏/歌词校准、重复队列、5000 ms 暂停进度、自定义源与明确停用、正式音频及 1024 字节暂停下载保留。数据库仍为 v5，完整性正常、无外键错误；升级夹具清理完成，见 `official-upgrade-verification.json`。
+
+实际签名生产 APK 冷启动恢复随机队列后，通过真实界面按钮开始播放。后台 14 次采样覆盖至少 70 秒，自然随机播放遍历四个队列条目（其中两项为同一歌曲），12 次系统媒体通知下一首命令、回到界面暂停/恢复均通过。整个检查期间 PID 不变，前台服务保持运行，见 `smoke-result.json`、`smoke-final.log` 和 `smoke-background-*.txt`。首轮生产脚本曾在即时 PLAYING 断言中失败，退出记录仅为脚本随后主动停止；改为读取同一状态快照并限时等待就绪后全部通过，APK 与生产代码没有改动。
+
+本轮测试音频、数据库夹具和队列已清理，测试前的偏好文件从归档恢复，专用设备保留正式 v1.4.5。原正式 APK 和 keystore 未替换或删除。
+
+## 发布
+
+[PR #5](https://github.com/GodBook/PickAudio/pull/5) 已合入 main，发布标签 `v1.4.5` 指向合并提交 `aae7ede78eb14087d3eb78d9e974fb1b62678f26`。合并后的应用源码与验证的功能提交一致。[v1.4.5 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.4.5) 已作为最新正式版公开，包含 APK、SHA256SUMS.txt 和 version.json。上传后回下载的 APK 大小、SHA-256 与元数据一致，根目录更新元数据同步为 code 18。
+
+本轮未在用户 OEM 实体机复验；模拟器结果不等同于所有机型的验收，也未据此保证外部音源和网络长期可用。

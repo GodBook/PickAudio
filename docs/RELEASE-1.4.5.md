@@ -9,3 +9,7 @@
 媒体会话时间线同时固定歌曲时长和随机顺序快照，避免旧时间线随当前播放器变化；手动选择随机池中的歌曲后，会从待播池移除当前条目，避免紧接着再次选中同一条目。播放模式变化会通知媒体控制器更新列表。
 
 验证范围、回归结果及正式包信息见 [v1.4.5 验证记录](VALIDATION-1.4.5.md)。
+
+84 项 JVM 测试、本地 90 项 Debug 设备测试，以及 GitHub Debug/裁剪验证变体各 90 项 API 36 设备测试通过。原签名覆盖升级保留数据，实际签名生产包的后台随机切歌、通知操作与界面恢复通过。尚未在用户 OEM 实体机复验。
+
+正式下载：[PickAudio-v1.4.5-release.apk](https://github.com/GodBook/PickAudio/releases/download/v1.4.5/PickAudio-v1.4.5-release.apk)，大小 8,242,461 字节，SHA-256：`4cbc3eef20aeb2a7eec73e4cac12958918d806f76c9f78cb05bf5551178e4d49`。
