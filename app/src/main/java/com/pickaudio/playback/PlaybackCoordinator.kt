@@ -608,6 +608,7 @@ class PlaybackCoordinator(
     fun previousQueueItem() = previousInternal(true)
     fun nextQueueIndex(): Int = queueModel.peekNext(_playbackMode.value) ?: C.INDEX_UNSET
     fun previousQueueIndex(): Int = queueModel.peekPrevious(_playbackMode.value) ?: C.INDEX_UNSET
+    internal fun shuffleTimelineOrder(): List<Int> = queueModel.shuffleTimelineOrder()
 
     private fun previousInternal(forceTrack: Boolean) {
         // Smart Previous Rule: if progress > 3s, seek to 0. Else jump previous.

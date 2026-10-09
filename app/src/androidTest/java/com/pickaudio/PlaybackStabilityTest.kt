@@ -1,6 +1,7 @@
 package com.pickaudio
 
 import android.app.ActivityManager
+import android.content.ComponentName
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.net.Uri
@@ -11,6 +12,8 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -37,6 +40,79 @@ import java.util.concurrent.TimeUnit
 @RunWith(AndroidJUnit4::class)
 class PlaybackStabilityTest {
     private val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as PickAudioApplication
+
+    @Test fun shuffleNaturalTransitionsKeepControllerAndUiResponsive() = runBlocking {
+        withPlayingFixture { coordinator, scenario, audio ->
+            val first = coordinator.currentTrack.value!!
+            val files = List(2) { File.createTempFile("shuffle-playback-", ".wav", app.filesDir) }
+            val tracks = files.mapIndexed { index, file ->
+                file.writeBytes(audio)
+                Track("shuffle_playback_${System.nanoTime()}_$index", "随机播放回归 $index", "测试", "", 90_000,
+                    localUri = Uri.fromFile(file).toString())
+            }
+            var controller: MediaController? = null
+            try {
+                tracks.forEach { track ->
+                    app.database.trackDao().insertOrUpdate(TrackEntity(track.id, track.title, track.artist, "", track.durationMs, null))
+                    app.database.localAssetDao().insertOrUpdate(LocalAssetEntity(trackId = track.id, uri = track.localUri!!,
+                        sourceType = "SAF_FILE", fileSize = audio.size.toLong(), mimeType = "audio/wav", format = "wav"))
+                }
+                withContext(Dispatchers.Main) {
+                    coordinator.setPlaybackMode(PlaybackMode.SHUFFLE)
+                    coordinator.setQueueAndPlay(listOf(first, tracks[0], first, tracks[1]), 3)
+                }
+                await { coordinator.isPlaying.value && serviceIsForeground() }
+                val future = withContext(Dispatchers.Main) {
+                    MediaController.Builder(app, SessionToken(app, ComponentName(app, PlaybackService::class.java))).buildAsync()
+                }
+                val remote = withContext(Dispatchers.IO) { future.get(10, TimeUnit.SECONDS) }.also { controller = it }
+                await { remote.mediaItemCount == 4 && remote.shuffleModeEnabled && remote.isPlaying }
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                val visited = mutableListOf<Long>()
+                // Seek near the end to exercise real natural completion, resolution and session updates.
+                repeat(24) { iteration ->
+                    val entry = withContext(Dispatchers.Main) { coordinator.queueEntries.value[coordinator.currentIndex.value].id }
+                    visited.add(entry)
+                    withContext(Dispatchers.Main) { remote.seekTo(coordinator.durationMs.value - 350) }
+                    await { coordinator.queueEntries.value[coordinator.currentIndex.value].id != entry &&
+                        coordinator.isPlaying.value && remote.isPlaying &&
+                        remote.currentMediaItem?.mediaId == coordinator.queueEntries.value[coordinator.currentIndex.value].id.toString() }
+                    withContext(Dispatchers.Main) {
+                        assertTrue("Background shuffle lost foreground service", serviceIsForeground())
+                        val timeline = remote.currentTimeline
+                        val windows = mutableSetOf<Int>()
+                        var index = timeline.getFirstWindowIndex(true)
+                        repeat(timeline.windowCount) {
+                            assertTrue("Controller received a cyclic shuffle order", windows.add(index))
+                            index = timeline.getNextWindowIndex(index, Player.REPEAT_MODE_OFF, true)
+                        }
+                        assertEquals(C.INDEX_UNSET, index)
+                    }
+                    if (iteration == 11) {
+                        scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                        scenario.onActivity { assertFalse(it.isFinishing) }
+                        withContext(Dispatchers.Main) { remote.pause() }
+                        await { !coordinator.isPlaying.value && !coordinator.playRequested.value }
+                        withContext(Dispatchers.Main) { remote.play() }
+                        await { coordinator.isPlaying.value && serviceIsForeground() }
+                        scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                    }
+                }
+                assertEquals(4, visited.take(4).toSet().size)
+                // After a refill, the boundary song is excluded from the three upcoming entries.
+                visited.drop(1).chunked(3).filter { it.size == 3 }.forEach { round ->
+                    assertEquals("A shuffle pool repeated a queue occurrence", 3, round.toSet().size)
+                }
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                scenario.onActivity { assertFalse(it.isFinishing) }
+            } finally {
+                withContext(Dispatchers.Main) { controller?.release(); coordinator.clearQueue() }
+                coordinator.flushPersistence()
+                tracks.forEach { app.database.trackDao().deleteById(it.id) }
+                files.forEach { it.delete() }
+            }
+        }
+    }
 
     @Test fun silentRemoteStallRecoversSameEntryWithoutTransportError() = runBlocking {
         withPlayingFixture { coordinator, scenario, audio ->
