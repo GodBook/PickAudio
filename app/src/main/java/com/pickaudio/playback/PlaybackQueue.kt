@@ -53,6 +53,7 @@ class PlaybackQueue(private val shuffle: (List<Long>) -> List<Long> = { it.shuff
     fun select(index: Int): Track? {
         val entry = items.getOrNull(index) ?: return null
         currentId = entry.id
+        pool.remove(entry.id)
         return entry.track
     }
 
@@ -115,6 +116,22 @@ class PlaybackQueue(private val shuffle: (List<Long>) -> List<Long> = { it.shuff
         pool.clear()
         pool.addAll(shuffle(items.map { it.id }.filter { it != currentId }))
         if (clearHistory) history.clear()
+    }
+
+    /** A complete permutation for Media3, whose timeline traversal must terminate with repeat off. */
+    fun shuffleTimelineOrder(): List<Int> {
+        if (currentIndex < 0) return items.indices.toList()
+        if (pool.isEmpty() && items.size > 1) resetShuffle()
+        val indices = items.mapIndexed { index, entry -> entry.id to index }.toMap()
+        val upcoming = pool.filter { it in indices && it != currentId }.distinct()
+        val upcomingIds = upcoming.toSet()
+        // Keep the most recent occurrence of each previously played entry, including across rounds.
+        val played = history.asReversed().distinct().asReversed()
+            .filter { it in indices && it != currentId && it !in upcomingIds }
+        val playedIds = played.toSet()
+        val other = items.map { it.id }
+            .filter { it != currentId && it !in upcomingIds && it !in playedIds }
+        return (other + played + listOfNotNull(currentId) + upcoming).map { indices.getValue(it) }
     }
 
     fun peekNext(mode: PlaybackMode): Int? {

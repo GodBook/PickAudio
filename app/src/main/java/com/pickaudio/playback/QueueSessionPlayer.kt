@@ -36,7 +36,8 @@ class QueueSessionPlayer(private val coordinator: PlaybackCoordinator) : Forward
                 val old = previous
                 previous = state
                 val flags = FlagSet.Builder()
-                val timelineChanged = old?.entries != state.entries || (state.mode == PlaybackMode.SHUFFLE && old.index != state.index)
+                val timelineChanged = old?.entries != state.entries || old?.mode != state.mode ||
+                    (state.mode == PlaybackMode.SHUFFLE && old.index != state.index)
                 if (timelineChanged) flags.add(Player.EVENT_TIMELINE_CHANGED)
                 if (old?.index != state.index || old.entries.getOrNull(old.index)?.id != state.entries.getOrNull(state.index)?.id) {
                     flags.add(Player.EVENT_MEDIA_ITEM_TRANSITION).add(Player.EVENT_MEDIA_METADATA_CHANGED)
@@ -185,33 +186,49 @@ class QueueSessionPlayer(private val coordinator: PlaybackCoordinator) : Forward
 }
 
 @OptIn(UnstableApi::class)
-private class QueueTimeline(private val coordinator: PlaybackCoordinator) : Timeline() {
+private class QueueTimeline(coordinator: PlaybackCoordinator) : Timeline() {
     private val entries = coordinator.queueEntries.value.toList()
     private val currentIndex = coordinator.currentIndex.value
-    private val nextIndex = coordinator.nextQueueIndex()
-    private val previousIndex = coordinator.previousQueueIndex()
+    private val currentDurationMs = coordinator.durationMs.value
+    private val shuffleOrder = if (coordinator.playbackMode.value == PlaybackMode.SHUFFLE)
+        coordinator.shuffleTimelineOrder() else entries.indices.toList()
+    private val shufflePositions = IntArray(entries.size).also { positions ->
+        shuffleOrder.forEachIndexed { position, index -> positions[index] = position }
+    }
     override fun getWindowCount() = entries.size
     override fun getPeriodCount() = entries.size
     override fun getWindow(index: Int, window: Window, defaultPositionProjectionUs: Long): Window {
         val entry = entries[index]
-        val duration = if (index == currentIndex) coordinator.durationMs.value else entry.track.durationMs
+        val duration = if (index == currentIndex) currentDurationMs else entry.track.durationMs
         return window.set(entry.id, entry.toMediaItem(), null, C.TIME_UNSET, C.TIME_UNSET, C.TIME_UNSET,
             true, false, null, 0, if (duration > 0) duration * 1000 else C.TIME_UNSET, index, index, 0)
     }
     override fun getPeriod(index: Int, period: Period, setIds: Boolean): Period {
         val entry = entries[index]
-        val duration = if (index == currentIndex) coordinator.durationMs.value else entry.track.durationMs
+        val duration = if (index == currentIndex) currentDurationMs else entry.track.durationMs
         return period.set(if (setIds) entry.id else null, if (setIds) entry.id else null, index,
             if (duration > 0) duration * 1000 else C.TIME_UNSET, 0)
     }
     override fun getIndexOfPeriod(uid: Any) = entries.indexOfFirst { it.id == uid }
     override fun getUidOfPeriod(index: Int): Any = entries[index].id
-    override fun getNextWindowIndex(index: Int, repeatMode: Int, shuffleModeEnabled: Boolean): Int =
-        if (repeatMode == Player.REPEAT_MODE_ONE) index
-        else if (shuffleModeEnabled && index == currentIndex) nextIndex
-        else super.getNextWindowIndex(index, repeatMode, false)
-    override fun getPreviousWindowIndex(index: Int, repeatMode: Int, shuffleModeEnabled: Boolean): Int =
-        if (repeatMode == Player.REPEAT_MODE_ONE) index
-        else if (shuffleModeEnabled && index == currentIndex) previousIndex
-        else super.getPreviousWindowIndex(index, repeatMode, false)
+    override fun getFirstWindowIndex(shuffleModeEnabled: Boolean): Int =
+        if (isEmpty) C.INDEX_UNSET else if (shuffleModeEnabled) shuffleOrder.first() else 0
+    override fun getLastWindowIndex(shuffleModeEnabled: Boolean): Int =
+        if (isEmpty) C.INDEX_UNSET else if (shuffleModeEnabled) shuffleOrder.last() else entries.lastIndex
+    override fun getNextWindowIndex(index: Int, repeatMode: Int, shuffleModeEnabled: Boolean): Int {
+        if (!shuffleModeEnabled) return super.getNextWindowIndex(index, repeatMode, false)
+        if (isEmpty) return C.INDEX_UNSET
+        if (repeatMode == Player.REPEAT_MODE_ONE) return index
+        val next = shufflePositions[index] + 1
+        return if (next < shuffleOrder.size) shuffleOrder[next]
+            else if (repeatMode == Player.REPEAT_MODE_ALL) shuffleOrder.first() else C.INDEX_UNSET
+    }
+    override fun getPreviousWindowIndex(index: Int, repeatMode: Int, shuffleModeEnabled: Boolean): Int {
+        if (!shuffleModeEnabled) return super.getPreviousWindowIndex(index, repeatMode, false)
+        if (isEmpty) return C.INDEX_UNSET
+        if (repeatMode == Player.REPEAT_MODE_ONE) return index
+        val previous = shufflePositions[index] - 1
+        return if (previous >= 0) shuffleOrder[previous]
+            else if (repeatMode == Player.REPEAT_MODE_ALL) shuffleOrder.last() else C.INDEX_UNSET
+    }
 }

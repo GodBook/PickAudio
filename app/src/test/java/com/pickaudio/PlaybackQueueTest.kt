@@ -72,4 +72,54 @@ class PlaybackQueueTest {
         queue.insert(track("B"))
         assertTrue(queue.entries[1].id > futureId)
     }
+
+    @Test fun shuffleTimelineIsACompletePermutationAcrossRoundsAndDuplicateTracks() {
+        val queue = PlaybackQueue { it }
+        queue.replace(listOf(track("A"), track("B"), track("A"), track("C")), 3)
+        repeat(30) {
+            val order = queue.shuffleTimelineOrder()
+            assertEquals(listOf(0, 1, 2, 3), order.sorted())
+            val position = order.indexOf(queue.currentIndex)
+            assertEquals(queue.peekNext(PlaybackMode.SHUFFLE), order[(position + 1) % order.size])
+            val snapshot = queue.snapshot()
+            assertEquals(order, queue.shuffleTimelineOrder())
+            assertEquals(snapshot, queue.snapshot())
+            queue.next(PlaybackMode.SHUFFLE, naturalEnd = true)
+        }
+    }
+
+    @Test fun selectingAnUpcomingSongRemovesItFromTheShufflePool() {
+        val queue = PlaybackQueue { it }
+        queue.replace(listOf(track("A"), track("B"), track("C")))
+        assertEquals(1, queue.peekNext(PlaybackMode.SHUFFLE))
+        queue.select(1)
+        assertEquals(2, queue.peekNext(PlaybackMode.SHUFFLE))
+        assertEquals(listOf(0, 1, 2), queue.shuffleTimelineOrder().sorted())
+    }
+
+    @Test fun shuffleTimelineSurvivesHistoryEditsAndRestore() {
+        val queue = PlaybackQueue { it }
+        queue.replace(List(5) { track("T$it") })
+        repeat(3) { queue.next(PlaybackMode.SHUFFLE) }
+        queue.previous(PlaybackMode.SHUFFLE)
+        var order = queue.shuffleTimelineOrder()
+        assertEquals(queue.peekPrevious(PlaybackMode.SHUFFLE), order[order.indexOf(queue.currentIndex) - 1])
+        queue.move(4, 0)
+        queue.remove(1)
+        val restored = PlaybackQueue { it }
+        restored.restore(queue.snapshot())
+        order = restored.shuffleTimelineOrder()
+        assertEquals(restored.entries.indices.toList(), order.sorted())
+        assertEquals(restored.peekNext(PlaybackMode.SHUFFLE), order[(order.indexOf(restored.currentIndex) + 1) % order.size])
+    }
+
+    @Test fun emptyAndSingleSongShuffleTimelinesRemainValid() {
+        val queue = PlaybackQueue { it }
+        assertTrue(queue.shuffleTimelineOrder().isEmpty())
+        queue.replace(listOf(track("A")))
+        assertEquals(listOf(0), queue.shuffleTimelineOrder())
+        val restored = PlaybackQueue { it }
+        restored.restore(queue.snapshot().copy(shufflePool = emptyList(), shuffleHistory = listOf(queue.current!!.id)))
+        assertEquals(listOf(0), restored.shuffleTimelineOrder())
+    }
 }
