@@ -16,7 +16,7 @@ import android.app.ActivityManager
 /** Explicit local export, with aggregate counters and no song, URI, script or credential data. */
 object DiagnosticReport {
     suspend fun export(context: Context, database: PickAudioDatabase, preferences: UserPreferences, target: Uri) = withContext(Dispatchers.IO) {
-        val metrics = PlaybackDiagnostics.metrics.value
+        val metrics = PlaybackDiagnostics.snapshot()
         val report = JSONObject().apply {
             put("version", BuildConfig.VERSION_NAME); put("versionCode", BuildConfig.VERSION_CODE)
             put("sdk", Build.VERSION.SDK_INT); put("schema", database.openHelper.readableDatabase.version)
@@ -36,7 +36,12 @@ object DiagnosticReport {
             put("cacheLimitMiB", preferences.audioCacheMegabytes.first())
             put("cacheBytes", AudioCacheManager.size(context))
             put("plays", metrics.plays); put("lastFirstAudioMs", metrics.firstAudioMs ?: JSONObject.NULL)
+            put("firstAudioDefinition", "legacy field: isPlaying transition; use audioOutputMs for AudioTrack advancing event")
+            put("audioOutputMs", metrics.audioOutputMs ?: JSONObject.NULL)
+            put("playbackStagesMs", JSONObject(metrics.stagesMs))
             put("bufferCount", metrics.buffers); put("resolveFailures", metrics.resolveFailures)
+            put("rebufferCount", metrics.rebufferCount); put("bufferedMs", metrics.bufferedMs)
+            put("bufferReasonCounts", JSONObject(metrics.bufferReasons))
             put("lastErrorCategory", metrics.lastError ?: JSONObject.NULL)
             put("servedAudioBytes", metrics.servedBytes); put("cachedAudioBytes", metrics.cachedBytes)
             put("downloadStates", JSONObject(database.downloadDao().getAllTasksSync().groupingBy { it.status }.eachCount()))

@@ -12,6 +12,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import kotlinx.coroutines.flow.map
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -34,7 +36,9 @@ fun PlaylistDetailScreen(
     val app = LocalContext.current.applicationContext as PickAudioApplication
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
-    val storedTracks by remember(playlistId) { playlistRepository.getTracksForPlaylist(playlistId) }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val loadedTracks by remember(playlistId) { playlistRepository.getTracksForPlaylist(playlistId).map<List<Track>, List<Track>?> { it } }
+        .collectAsStateWithLifecycle(initialValue = null)
+    val storedTracks = loadedTracks.orEmpty()
     val playlists by playlistRepository.getAllPlaylists().collectAsStateWithLifecycle(initialValue = emptyList())
     val current by playbackCoordinator.currentTrack.collectAsStateWithLifecycle()
     val playing by playbackCoordinator.isPlaying.collectAsStateWithLifecycle()
@@ -42,7 +46,7 @@ fun PlaylistDetailScreen(
     var reordering by remember { mutableStateOf(false) }
     var savingOrder by remember { mutableStateOf(false) }
     var baseOrder by remember { mutableStateOf<List<String>>(emptyList()) }
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable(playlistId) { mutableStateOf("") }
     var selecting by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     androidx.activity.compose.BackHandler(enabled = selecting && !com.pickaudio.LocalPlayerOverlayVisible.current) { selecting = false; selectedIds = emptySet() }
@@ -95,7 +99,8 @@ fun PlaylistDetailScreen(
                 TextButton(onClick = { remove(selected) }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.action_remove)) }
             }
             LazyColumn(Modifier.weight(1f), state = listState, contentPadding = PaddingValues(bottom = 16.dp)) {
-                if (tracks.isEmpty()) item {
+                if (loadedTracks == null) item { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("正在读取歌单…", Modifier.padding(24.dp)) }
+                if (tracks.isEmpty() && loadedTracks != null) item {
                     Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(if (query.isBlank()) "歌单暂无歌曲" else "没有匹配歌曲")
                         Text(stringResource(com.pickaudio.R.string.ui_playlistdetailscreen_003), style = MaterialTheme.typography.bodyMedium)

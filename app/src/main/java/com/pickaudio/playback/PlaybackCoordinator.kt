@@ -74,7 +74,10 @@ class PlaybackCoordinator(
     private val queueModel = PlaybackQueue()
     private data class WriteRequest(val queue: QueueSnapshot, val position: Long, val mode: PlaybackMode,
         val completion: CompletableDeferred<Unit>? = null)
-    private val writes = Channel<WriteRequest>(Channel.UNLIMITED)
+    private val writes = Channel<Unit>(Channel.CONFLATED)
+    private val writeLock = Any()
+    private var pendingWrite: WriteRequest? = null
+    private val writeCompletions = mutableListOf<CompletableDeferred<Unit>>()
     private val _uiState = MutableStateFlow(PlaybackUiState())
     val uiState = _uiState.asStateFlow()
     private val _versionCandidates = MutableStateFlow<List<SearchSongItem>>(emptyList())
@@ -119,6 +122,10 @@ class PlaybackCoordinator(
                 setWakeMode(C.WAKE_MODE_NETWORK)
                 repeatMode = if (_playbackMode.value == PlaybackMode.SINGLE_LOOP && !stopAfterCurrentTrack) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
                 addListener(playerListener)
+                addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+                    override fun onAudioPositionAdvancing(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                        playoutStartSystemTimeMs: Long) { PlaybackDiagnostics.audioOutput() }
+                })
             }
     }
 
@@ -165,6 +172,12 @@ class PlaybackCoordinator(
     private var recoveryJob: Job? = null
     private var stallMonitorJob: Job? = null
     private var streamRecoveryAttempts = 0
+    private var uiVisible = false
+    fun setUiVisible(visible: Boolean) {
+        uiVisible = visible
+        if (visible && playerInstance?.playbackState == Player.STATE_READY)
+            _currentPositionMs.value = playerInstance!!.currentPosition.coerceAtLeast(0)
+    }
 
     init {
         startSnapshotWriter()
@@ -172,6 +185,12 @@ class PlaybackCoordinator(
     }
 
     private val playerListener = object : Player.Listener {
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            val remote = mediaItem?.localConfiguration?.uri?.scheme in listOf("http", "https")
+            playerInstance?.setWakeMode(if (remote) C.WAKE_MODE_NETWORK else C.WAKE_MODE_LOCAL)
+            if (!remote) stallMonitorJob?.cancel()
+            else if (_playRequested.value && _uiState.value.phase != PlaybackPhase.RESOLVING) startStallMonitor(requestGeneration)
+        }
         override fun onIsPlayingChanged(playing: Boolean) {
             _isPlaying.value = playing
             if (playing) PlaybackDiagnostics.playing()
@@ -206,6 +225,7 @@ class PlaybackCoordinator(
         override fun onPlaybackStateChanged(state: Int) {
             if (state == Player.STATE_BUFFERING) PlaybackDiagnostics.buffering()
             if (state == Player.STATE_READY) {
+                PlaybackDiagnostics.bufferEnded()
                 _durationMs.value = player.duration.coerceAtLeast(0L)
                 val format = player.audioFormat
                 val mime = format?.sampleMimeType.orEmpty()
@@ -242,6 +262,8 @@ class PlaybackCoordinator(
     }
 
     private fun handlePlaybackFailure(error: androidx.media3.common.PlaybackException) {
+        PlaybackDiagnostics.bufferEnded()
+        invalidateAudioCacheProbes()
         Log.e("PlaybackCoordinator", "ExoPlayer playback error: ${error.errorCodeName}", error)
         _isPlaying.value = false
         if (recoverStream(error)) return
@@ -250,6 +272,7 @@ class PlaybackCoordinator(
 
     private fun startStallMonitor(generation: Long) {
         stallMonitorJob?.cancel()
+        if (playerInstance?.currentMediaItem?.localConfiguration?.uri?.scheme !in listOf("http", "https")) return
         stallMonitorJob = scope.launch {
             val monitor = PlaybackStallMonitor()
             while (isActive && generation == requestGeneration) {
@@ -306,7 +329,7 @@ class PlaybackCoordinator(
                 } catch (e: Exception) {
                     Log.w("PlaybackCoordinator", "Error updating progress ticker: ${e.message}")
                 }
-                delay(500)
+                delay(if (uiVisible) 500 else 1000)
             }
         }
 
@@ -326,6 +349,7 @@ class PlaybackCoordinator(
     }
 
     fun setPlaybackMode(mode: PlaybackMode) {
+        if (_playbackMode.value == mode) return
         _playbackMode.value = mode
         playerInstance?.repeatMode = if (mode == PlaybackMode.SINGLE_LOOP && !stopAfterCurrentTrack) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
         if (mode == PlaybackMode.SHUFFLE) {
@@ -391,7 +415,8 @@ class PlaybackCoordinator(
 
     fun addTracksToQueue(tracks: List<Track>) {
         restoringJob?.cancel()
-        tracks.forEach { queueModel.insert(it) }
+        if (tracks.isEmpty()) return
+        queueModel.insertAll(tracks)
         publishQueue()
         persistQueue()
     }
@@ -455,7 +480,38 @@ class PlaybackCoordinator(
         persistQueue()
     }
 
+    fun reorderQueue(order: List<Long>, expected: List<Long>): Boolean {
+        if (!queueModel.reorder(order, expected)) return false
+        publishQueue()
+        persistQueue()
+        return true
+    }
+
     fun retryCurrent() { _currentTrack.value?.let { playTrack(it, startPosition = _currentPositionMs.value, requestedQuality = _uiState.value.requestedQuality) } }
+    fun sourcePlatformForCurrent(): String? {
+        if (_uiState.value.phase !in listOf(PlaybackPhase.ERROR, PlaybackPhase.RESOLVING, PlaybackPhase.CHOOSE_VERSION) &&
+            playerInstance?.currentMediaItem?.localConfiguration?.uri?.scheme in listOf("file", "content")) return null
+        return _currentTrack.value?.platform
+    }
+    fun retryAfterSourceChange(expectedEntryId: Long?) {
+        if (sourcePlatformForCurrent() == null) return
+        val track = _currentTrack.value ?: return
+        if (queueModel.current?.id != expectedEntryId) return
+        val generation = requestGeneration
+        scope.launch {
+            try {
+                val quality = _uiState.value.requestedQuality ?: userPreferences.defaultOnlineQuality.first().value
+                val supported = track.platform?.let { sourceManager.supportedQualities(it) }.orEmpty()
+                if (generation != requestGeneration || queueModel.current?.id != expectedEntryId) return@launch
+                if (track.platform != null && quality !in supported) {
+                    pause()
+                    _uiState.value = _uiState.value.copy(phase = PlaybackPhase.ERROR,
+                        message = "新音源不支持当前音质，请选择可用音质后重试")
+                } else playTrack(track, startPosition = _currentPositionMs.value, autoPlay = _playRequested.value, requestedQuality = quality)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { if (generation == requestGeneration) _uiState.value = _uiState.value.copy(message = e.message ?: "音源读取失败，请重试") }
+        }
+    }
     fun changeQuality(quality: String) {
         val track = _currentTrack.value ?: return
         val position = playerInstance?.takeIf { it.playbackState == Player.STATE_READY }?.currentPosition ?: _currentPositionMs.value
@@ -565,6 +621,7 @@ class PlaybackCoordinator(
     }
 
     fun seekTo(positionMs: Long) {
+        PlaybackDiagnostics.seeking()
         player.seekTo(positionMs)
         _currentPositionMs.value = positionMs
         saveSnapshot()
@@ -687,8 +744,12 @@ class PlaybackCoordinator(
                 // Keep them inside the same error boundary as resolution and preparation.
                 player.stop()
                 player.playWhenReady = false
+                var stageStart = SystemClock.elapsedRealtime()
                 if (_playRequested.value) ensurePlaybackService()
+                PlaybackDiagnostics.stage("service", SystemClock.elapsedRealtime() - stageStart)
+                stageStart = SystemClock.elapsedRealtime()
                 val mapping = withContext(Dispatchers.IO) { ensureTracksPersisted(listOf(track)) }
+                PlaybackDiagnostics.stage("identity", SystemClock.elapsedRealtime() - stageStart)
                 ensureActive()
                 if (generation != requestGeneration) return@launch
                 applyCanonicalTracks(mapping)
@@ -788,8 +849,12 @@ class PlaybackCoordinator(
                 withContext(Dispatchers.Main) {
                     if (generation == requestGeneration) _uiState.value = _uiState.value.copy(requestedQuality = quality)
                 }
+                var stageStart = SystemClock.elapsedRealtime()
                 val resource = sourceManager.resolveMusicResource(platform, songId, quality, track.title, track.artist)
+                PlaybackDiagnostics.stage("resolve", SystemClock.elapsedRealtime() - stageStart)
+                stageStart = SystemClock.elapsedRealtime()
                 val key = resolveAudioCacheKey(sourceManager.audioClient(), resource, platform, songId, quality)
+                PlaybackDiagnostics.stage("cacheValidation", SystemClock.elapsedRealtime() - stageStart)
                 withContext(Dispatchers.Main) { if (generation == requestGeneration) resolvedCacheKey = key }
                 return@withContext Uri.parse(resource.url)
             } catch (e: Exception) { throw e }
@@ -837,27 +902,33 @@ class PlaybackCoordinator(
     fun playQueueItemFromUi(index: Int) = playQueueItem(index)
 
     private fun saveSnapshot() {
-        writes.trySend(WriteRequest(queueModel.snapshot(), _currentPositionMs.value, _playbackMode.value))
+        enqueueWrite(WriteRequest(queueModel.snapshot(), _currentPositionMs.value, _playbackMode.value))
+    }
+
+    private fun enqueueWrite(request: WriteRequest) {
+        synchronized(writeLock) {
+            pendingWrite = request
+            request.completion?.let(writeCompletions::add)
+        }
+        writes.trySend(Unit)
     }
 
     suspend fun flushPersistence() = withContext(Dispatchers.Main) {
         val completion = CompletableDeferred<Unit>()
-        writes.send(WriteRequest(queueModel.snapshot(), _currentPositionMs.value, _playbackMode.value, completion))
+        enqueueWrite(WriteRequest(queueModel.snapshot(), _currentPositionMs.value, _playbackMode.value, completion))
         completion.await()
     }
 
     private fun startSnapshotWriter() {
         scope.launch(Dispatchers.IO) {
             var savedRevision = Long.MIN_VALUE
-            for (first in writes) {
-                var request = first
-                val completions = mutableListOf<CompletableDeferred<Unit>>()
-                first.completion?.let(completions::add)
-                while (true) {
-                    val next = writes.tryReceive().getOrNull() ?: break
-                    request = next
-                    next.completion?.let(completions::add)
-                }
+            for (signal in writes) {
+                val batch = synchronized(writeLock) {
+                    pendingWrite?.let { request ->
+                        (request to writeCompletions.toList()).also { pendingWrite = null; writeCompletions.clear() }
+                    }
+                } ?: continue
+                val (request, completions) = batch
                 try {
                     var mapping = request.queue.entries.associate { it.track.id to it.track }
                     database.withTransaction {

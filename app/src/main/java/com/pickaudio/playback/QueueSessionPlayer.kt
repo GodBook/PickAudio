@@ -26,6 +26,11 @@ class QueueSessionPlayer(private val coordinator: PlaybackCoordinator) : Forward
     private data class State(val entries: List<PlaybackQueueEntry>, val index: Int,
         val mode: PlaybackMode, val phase: PlaybackPhase, val requested: Boolean)
     private var previous: State? = null
+    private var cachedTimeline: Timeline? = null
+    private var timelineEntries: List<PlaybackQueueEntry>? = null
+    private var timelineIndex = -1
+    private var timelineDuration = -1L
+    private var timelineMode: PlaybackMode? = null
 
     init {
         scope.launch {
@@ -137,8 +142,8 @@ class QueueSessionPlayer(private val coordinator: PlaybackCoordinator) : Forward
     override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) =
         coordinator.setPlaybackMode(if (shuffleModeEnabled) PlaybackMode.SHUFFLE else PlaybackMode.SEQUENTIAL)
     override fun getMediaItemCount() = coordinator.queueEntries.value.size
-    override fun getMediaItemAt(index: Int) = coordinator.queueEntries.value[index].toMediaItem()
-    override fun getCurrentMediaItem() = coordinator.queueEntries.value.getOrNull(coordinator.currentIndex.value)?.toMediaItem()
+    override fun getMediaItemAt(index: Int) = (currentTimeline as QueueTimeline).mediaItemAt(index)
+    override fun getCurrentMediaItem() = coordinator.currentIndex.value.takeIf { it in coordinator.queueEntries.value.indices }?.let(::getMediaItemAt)
     override fun getMediaMetadata() = currentMediaItem?.mediaMetadata ?: MediaMetadata.EMPTY
     override fun getCurrentMediaItemIndex() = coordinator.currentIndex.value.coerceAtLeast(0)
     override fun getCurrentWindowIndex() = currentMediaItemIndex
@@ -173,7 +178,18 @@ class QueueSessionPlayer(private val coordinator: PlaybackCoordinator) : Forward
     override fun getContentDuration() = duration
     override fun getCurrentPosition() = if (coordinator.uiState.value.phase in listOf(PlaybackPhase.RESOLVING, PlaybackPhase.ERROR)) coordinator.currentPositionMs.value else super.getCurrentPosition()
     override fun getContentPosition() = currentPosition
-    override fun getCurrentTimeline(): Timeline = QueueTimeline(coordinator)
+    override fun getCurrentTimeline(): Timeline {
+        val entries = coordinator.queueEntries.value
+        val index = coordinator.currentIndex.value
+        val duration = coordinator.durationMs.value
+        val mode = coordinator.playbackMode.value
+        if (cachedTimeline == null || timelineEntries !== entries || timelineIndex != index ||
+            timelineDuration != duration || timelineMode != mode) {
+            cachedTimeline = QueueTimeline(coordinator)
+            timelineEntries = entries; timelineIndex = index; timelineDuration = duration; timelineMode = mode
+        }
+        return checkNotNull(cachedTimeline)
+    }
     override fun isCurrentMediaItemSeekable() = duration > 0
     override fun isCurrentWindowSeekable() = isCurrentMediaItemSeekable
     override fun release() { close(); coordinator.onServiceDestroyed() }
@@ -188,6 +204,11 @@ class QueueSessionPlayer(private val coordinator: PlaybackCoordinator) : Forward
 @OptIn(UnstableApi::class)
 private class QueueTimeline(coordinator: PlaybackCoordinator) : Timeline() {
     private val entries = coordinator.queueEntries.value.toList()
+    private val periodIndices = entries.mapIndexed { index, entry -> entry.id to index }.toMap()
+    private val mediaItems = arrayOfNulls<MediaItem>(entries.size)
+    fun mediaItemAt(index: Int): MediaItem = synchronized(mediaItems) {
+        mediaItems[index] ?: entries[index].toMediaItem().also { mediaItems[index] = it }
+    }
     private val currentIndex = coordinator.currentIndex.value
     private val currentDurationMs = coordinator.durationMs.value
     private val shuffleOrder = if (coordinator.playbackMode.value == PlaybackMode.SHUFFLE)
@@ -200,7 +221,7 @@ private class QueueTimeline(coordinator: PlaybackCoordinator) : Timeline() {
     override fun getWindow(index: Int, window: Window, defaultPositionProjectionUs: Long): Window {
         val entry = entries[index]
         val duration = if (index == currentIndex) currentDurationMs else entry.track.durationMs
-        return window.set(entry.id, entry.toMediaItem(), null, C.TIME_UNSET, C.TIME_UNSET, C.TIME_UNSET,
+        return window.set(entry.id, mediaItemAt(index), null, C.TIME_UNSET, C.TIME_UNSET, C.TIME_UNSET,
             true, false, null, 0, if (duration > 0) duration * 1000 else C.TIME_UNSET, index, index, 0)
     }
     override fun getPeriod(index: Int, period: Period, setIds: Boolean): Period {
@@ -209,7 +230,7 @@ private class QueueTimeline(coordinator: PlaybackCoordinator) : Timeline() {
         return period.set(if (setIds) entry.id else null, if (setIds) entry.id else null, index,
             if (duration > 0) duration * 1000 else C.TIME_UNSET, 0)
     }
-    override fun getIndexOfPeriod(uid: Any) = entries.indexOfFirst { it.id == uid }
+    override fun getIndexOfPeriod(uid: Any) = (uid as? Long)?.let { periodIndices[it] } ?: C.INDEX_UNSET
     override fun getUidOfPeriod(index: Int): Any = entries[index].id
     override fun getFirstWindowIndex(shuffleModeEnabled: Boolean): Int =
         if (isEmpty) C.INDEX_UNSET else if (shuffleModeEnabled) shuffleOrder.first() else 0

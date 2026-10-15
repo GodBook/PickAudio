@@ -16,7 +16,7 @@ class StreamRecoveryTest {
     }
 
     @Test fun expiredUrlsAndTransientHttpFailuresCanRecover() {
-        listOf(401, 403, 408, 410, 429, 500, 502, 503, 504).forEach {
+        listOf(401, 403, 408, 410, 412, 429, 500, 502, 503, 504).forEach {
             assertTrue("HTTP $it", isRecoverableHttpStatus(it))
         }
     }

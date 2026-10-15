@@ -57,7 +57,7 @@ class OptimizationCacheTest {
                 version = 2
                 assertArrayEquals(two, read("c")); assertEquals(2, gets.get())
                 assertNotEquals(keys[0], keys[2])
-                assertTrue(PlaybackDiagnostics.metrics.value.cachedBytes >= one.size)
+                assertTrue(PlaybackDiagnostics.snapshot().cachedBytes >= one.size)
             } finally { keys.distinct().forEach(cache::removeResource) }
         }
     }

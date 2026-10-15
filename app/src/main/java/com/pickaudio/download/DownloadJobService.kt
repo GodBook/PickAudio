@@ -11,6 +11,8 @@ import com.pickaudio.MainActivity
 import com.pickaudio.PickAudioApplication
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 class DownloadJobService : JobService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -31,10 +33,10 @@ class DownloadJobService : JobService() {
         val coordinator = (application as PickAudioApplication).downloadCoordinator
         run.job = scope.launch {
             val notificationJob = launch {
-                coordinator.getAllTasks().collectLatest { tasks ->
-                    val active = tasks.filter { it.status in DownloadCoordinator.ACTIVE_STATES }
-                    manager.notify(2040, builder.setContentText(active.firstOrNull()?.title ?: "等待下一首")
-                        .setSubText("${active.size} 首正在处理").build())
+                coordinator.notificationTasks.map { tasks -> (tasks.firstOrNull()?.title ?: "等待下一首") to tasks.size }
+                    .distinctUntilChanged().collectLatest { (title, count) ->
+                    manager.notify(2040, builder.setContentText(title)
+                        .setSubText("$count 首正在处理").build())
                 }
             }
             try { withContext(Dispatchers.IO) { coordinator.runPending(params.network, enforceNetwork = true) } }

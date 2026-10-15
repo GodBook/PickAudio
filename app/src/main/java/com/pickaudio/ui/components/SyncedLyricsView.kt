@@ -26,6 +26,14 @@ import androidx.compose.ui.unit.sp
 import com.pickaudio.online.LyricLine
 import com.pickaudio.online.LyricParser
 import kotlinx.coroutines.delay
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+
+@Composable
+fun ConnectedSyncedLyricsView(lyrics: List<LyricLine>, coordinator: com.pickaudio.playback.PlaybackCoordinator,
+    offsetMs: Long, onSeekTo: (Long) -> Unit, onOffsetChange: (Long) -> Unit, fontSizeSp: Int, showTranslation: Boolean) {
+    val position by coordinator.currentPositionMs.collectAsStateWithLifecycle()
+    SyncedLyricsView(lyrics, position, offsetMs, onSeekTo, onOffsetChange, fontSizeSp = fontSizeSp, showTranslation = showTranslation)
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

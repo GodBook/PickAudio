@@ -7,6 +7,36 @@ import org.junit.Test
 
 class PlaybackQueueTest {
     private fun track(id: String) = Track(id, id, "", "", 120000)
+    @Test fun batchInsertBuildsShuffleOnceAndKeepsOccurrenceIdentity() {
+        var shuffles = 0
+        val queue = PlaybackQueue { shuffles++; it }
+        queue.replace(listOf(track("A"), track("B")))
+        queue.select(1)
+        val current = queue.current!!.id
+        val revision = queue.revision
+        shuffles = 0
+        queue.insertAll(List(1000) { track("A") })
+        assertEquals(1, shuffles)
+        assertEquals(revision + 1, queue.revision)
+        assertEquals(current, queue.current!!.id)
+        assertEquals(1002, queue.entries.map { it.id }.distinct().size)
+        assertEquals(queue.entries.indices.toList(), queue.shuffleTimelineOrder().sorted())
+        val snapshot = queue.snapshot()
+        queue.insertAll(emptyList())
+        assertEquals(snapshot, queue.snapshot())
+    }
+    @Test fun reorderedQueueRejectsConcurrentChangesAndRetainsCurrentIdentity() {
+        val queue = PlaybackQueue { it }
+        queue.replace(List(10000) { track("T${it % 100}") }, 4000)
+        val before = queue.entries.map { it.id }
+        val current = queue.current!!.id
+        assertTrue(queue.reorder(before.reversed(), before))
+        assertEquals(current, queue.current!!.id)
+        assertEquals(5999, queue.currentIndex)
+        assertFalse(queue.reorder(before, before))
+        assertEquals(before.reversed(), queue.entries.map { it.id })
+        assertEquals(queue.entries.indices.toList(), queue.shuffleTimelineOrder().sorted())
+    }
     @Test fun duplicateOccurrenceSelectionAndRestoreAreExact() {
         val queue = PlaybackQueue()
         queue.replace(listOf(track("A"), track("B"), track("A")))

@@ -48,12 +48,14 @@ interface TrackDao {
 interface LocalAssetDao {
     @Query("SELECT * FROM local_assets WHERE unavailableReason = '删除待确认'")
     suspend fun getPendingDeletions(): List<LocalAssetEntity>
-    @Query("UPDATE local_assets SET audioInfoJson = :info WHERE id = :id")
-    suspend fun updateAudioInfo(id: Long, info: String)
+    @Query("UPDATE local_assets SET audioInfoJson = :info WHERE id = :id AND audioInfoJson IS NOT :info")
+    suspend fun updateAudioInfo(id: Long, info: String): Int
     @Query("SELECT * FROM local_assets WHERE trackId IN (:ids)")
     suspend fun getAssetsForTracks(ids: List<String>): List<LocalAssetEntity>
     @Query("SELECT * FROM local_assets")
     fun getAllAssets(): Flow<List<LocalAssetEntity>>
+    @Query("SELECT * FROM local_assets WHERE trackId IN (SELECT id FROM tracks WHERE isInLibrary = 1)")
+    fun getLibraryAssets(): Flow<List<LocalAssetEntity>>
     @Query("SELECT * FROM local_assets WHERE trackId = :trackId")
     suspend fun getAssetsForTrack(trackId: String): List<LocalAssetEntity>
 
@@ -63,7 +65,7 @@ interface LocalAssetDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdate(asset: LocalAssetEntity): Long
 
-    @Query("UPDATE local_assets SET isAvailable = :available, unavailableReason = CASE WHEN :available THEN NULL ELSE :reason END WHERE id = :id AND (COALESCE(unavailableReason, '') != '删除待确认' OR :reason = '删除待确认')")
+    @Query("UPDATE local_assets SET isAvailable = :available, unavailableReason = CASE WHEN :available THEN NULL ELSE :reason END WHERE id = :id AND (COALESCE(unavailableReason, '') != '删除待确认' OR :reason = '删除待确认') AND (isAvailable != :available OR unavailableReason IS NOT CASE WHEN :available THEN NULL ELSE :reason END)")
     suspend fun updateAvailability(id: Long, available: Boolean, reason: String? = null)
     @Query("UPDATE local_assets SET isAvailable = :available, unavailableReason = CASE WHEN :available THEN NULL ELSE :reason END WHERE id = :id AND unavailableReason = '删除待确认'")
     suspend fun finishDeletion(id: Long, available: Boolean, reason: String? = null)
@@ -81,6 +83,8 @@ interface OnlineRefDao {
     suspend fun getRefsForTracks(ids: List<String>): List<OnlineRefEntity>
     @Query("SELECT * FROM online_refs")
     fun getAllRefs(): Flow<List<OnlineRefEntity>>
+    @Query("SELECT * FROM online_refs WHERE trackId IN (SELECT id FROM tracks WHERE isInLibrary = 1)")
+    fun getLibraryRefs(): Flow<List<OnlineRefEntity>>
     @Query("SELECT * FROM online_refs WHERE platform = :platform AND platformSongId = :songId LIMIT 1")
     suspend fun getByPlatformId(platform: String, songId: String): OnlineRefEntity?
 
@@ -241,6 +245,16 @@ interface SourceDao {
 
 @Dao
 interface DownloadDao {
+    @Query("SELECT * FROM download_tasks WHERE status IN (:statuses) ORDER BY createdAt DESC LIMIT :limit")
+    fun getTasksForStatuses(statuses: List<String>, limit: Int): Flow<List<DownloadTaskEntity>>
+    @Query("SELECT status, COUNT(*) AS count FROM download_tasks GROUP BY status")
+    fun getStateCounts(): Flow<List<DownloadStateCount>>
+    @Query("SELECT id, title FROM download_tasks WHERE status IN ('RESOLVING','DOWNLOADING','VERIFYING','PUBLISHING') ORDER BY createdAt ASC")
+    fun getNotificationTasks(): Flow<List<DownloadNotificationRow>>
+    @Query("SELECT * FROM download_tasks WHERE status = 'PENDING' ORDER BY createdAt ASC")
+    suspend fun getPendingTasks(): List<DownloadTaskEntity>
+    @Query("SELECT * FROM download_tasks WHERE status = 'COMPLETED' ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun getCompletedTasks(limit: Int = Int.MAX_VALUE): List<DownloadTaskEntity>
     @Query("SELECT COUNT(*) FROM download_tasks WHERE status != 'COMPLETED'")
     fun getPendingCount(): Flow<Int>
     @Query("SELECT * FROM download_tasks ORDER BY createdAt ASC")

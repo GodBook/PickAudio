@@ -14,13 +14,19 @@ data class LibraryQuery(val query: String = "", val view: String = "全部", val
     val sort: String = "最近添加", val filter: String = "全部")
 data class LibraryGroup(val key: String, val label: String, val count: Int, val preview: String)
 data class LibraryViewState(val allTracks: List<Track> = emptyList(), val tracks: List<Track> = emptyList(),
-    val groups: List<LibraryGroup> = emptyList(), val error: String? = null)
+    val groups: List<LibraryGroup> = emptyList(), val error: String? = null, val loading: Boolean = false)
 data class IndexedTrack(val track: Track, val title: String, val artist: String, val album: String, val folder: String)
 data class LibraryIndex(val tracks: List<Track>, val rows: List<IndexedTrack>)
-fun buildLibraryIndex(tracks: List<Track>) = LibraryIndex(tracks, tracks.map {
-    IndexedTrack(it, it.title.lowercase(Locale.ROOT), it.artist.lowercase(Locale.ROOT),
-        it.album.lowercase(Locale.ROOT), it.folderName.lowercase(Locale.ROOT))
-})
+fun buildLibraryIndex(tracks: List<Track>, previous: LibraryIndex? = null): LibraryIndex {
+    val known = previous?.rows?.associateBy { it.track.id }.orEmpty()
+    return LibraryIndex(tracks, tracks.map { track ->
+        val old = known[track.id]
+        if (old != null && old.track.title == track.title && old.track.artist == track.artist &&
+            old.track.album == track.album && old.track.folderName == track.folderName) old.copy(track = track)
+        else IndexedTrack(track, track.title.lowercase(Locale.ROOT), track.artist.lowercase(Locale.ROOT),
+            track.album.lowercase(Locale.ROOT), track.folderName.lowercase(Locale.ROOT))
+    })
+}
 
 /** Pure production filtering/grouping; it runs away from the main thread in the ViewModel. */
 fun buildLibraryView(all: List<Track>, options: LibraryQuery, recentIds: List<String>): LibraryViewState =
@@ -67,15 +73,21 @@ fun buildLibraryView(index: LibraryIndex, options: LibraryQuery, recentIds: List
 @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
 class LibraryBrowserViewModel(repository: LibraryRepository, preferences: UserPreferences) : ViewModel() {
     private val options = MutableStateFlow(LibraryQuery())
+    private val reload = MutableStateFlow(0L)
+    private var lastIndex: LibraryIndex? = null
+    private var lastView = LibraryViewState(loading = true)
     private val indexed = repository.getAllTracks().mapLatest { tracks ->
-        withContext(Dispatchers.Default) { buildLibraryIndex(tracks) }
+        withContext(Dispatchers.Default) { buildLibraryIndex(tracks, lastIndex) }.also { lastIndex = it }
     }
-    val state = combine(indexed, preferences.recentTrackIds, options.debounce(150)) { index, recent, query ->
+    val state = reload.flatMapLatest { combine(indexed, preferences.recentTrackIds, options.debounce(150)) { index, recent, query ->
         Triple(index, recent, query)
     }.mapLatest { (index, recent, query) -> withContext(Dispatchers.Default) { buildLibraryView(index, query, recent) } }
-        .catch { error -> emit(LibraryViewState(error = error.message ?: "曲库暂时无法读取")) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LibraryViewState())
+        .onEach { lastView = it }
+        .onStart { emit(lastView.copy(loading = true, error = null)) }
+        .catch { error -> emit(lastView.copy(loading = false, error = error.message ?: "曲库暂时无法读取")) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LibraryViewState(loading = true))
     fun browse(query: LibraryQuery) { options.value = query }
+    fun retry() { reload.value++ }
     class Factory(private val repository: LibraryRepository, private val preferences: UserPreferences) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T = LibraryBrowserViewModel(repository, preferences) as T

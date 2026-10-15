@@ -74,10 +74,10 @@ fun SettingsScreen(
     val onlineQuality by userPreferences.defaultOnlineQuality.collectAsStateWithLifecycle(initialValue = Quality.Q128K)
     val downloadQuality by userPreferences.defaultDownloadQuality.collectAsStateWithLifecycle(initialValue = Quality.Q320K)
     val wifiOnly by userPreferences.wifiOnlyDownload.collectAsStateWithLifecycle(initialValue = true)
-    val lyricSize by userPreferences.lyricFontSize.collectAsStateWithLifecycle(initialValue = 18)
+    val savedLyricSize by userPreferences.lyricFontSize.collectAsStateWithLifecycle(initialValue = 18)
+    var lyricSize by remember(savedLyricSize) { mutableIntStateOf(savedLyricSize) }
     val translation by userPreferences.showLyricTranslation.collectAsStateWithLifecycle(initialValue = true)
     val cacheMegabytes by userPreferences.audioCacheMegabytes.collectAsStateWithLifecycle(initialValue = 256)
-    val metrics by com.pickaudio.playback.PlaybackDiagnostics.metrics.collectAsStateWithLifecycle()
     val updateStatus by appUpdateManager.status.collectAsStateWithLifecycle()
     val caches = remember { CacheRepository(app, app.database, app.downloadCoordinator) }
     var usage by remember { mutableStateOf(CacheUsage()) }
@@ -89,6 +89,11 @@ fun SettingsScreen(
     var restoreSettings by remember { mutableStateOf(true) }
     var report by remember { mutableStateOf<RestoreReport?>(null) }
     var section by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
+    val metricsFlow = remember(section) {
+        if (section == SettingsSection.ABOUT) com.pickaudio.playback.PlaybackDiagnostics.metrics
+        else kotlinx.coroutines.flow.flowOf(com.pickaudio.playback.PlaybackMetrics())
+    }
+    val metrics by metricsFlow.collectAsStateWithLifecycle(initialValue = com.pickaudio.playback.PlaybackMetrics())
     val listState = rememberLazyListState()
     val pendingRestores by backupManager.pendingSessions.collectAsStateWithLifecycle(initialValue = emptyList())
     val recoveryStatus by backupManager.recoveryStatus.collectAsStateWithLifecycle()
@@ -189,7 +194,8 @@ fun SettingsScreen(
             }
             SettingsSection.LYRICS -> item {
                 Text("字号 · $lyricSize")
-                Slider(lyricSize.toFloat(), { scope.launch { userPreferences.setLyricFontSize(it.toInt()) } }, valueRange = 14f..28f, steps = 13)
+                Slider(lyricSize.toFloat(), { lyricSize = it.toInt() },
+                    onValueChangeFinished = { scope.launch { userPreferences.setLyricFontSize(lyricSize) } }, valueRange = 14f..28f, steps = 13)
                 Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLow,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp)) {
                     Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -261,7 +267,7 @@ fun SettingsScreen(
                 TextButton(onClick = { showLicenses = true }) { Text(stringResource(com.pickaudio.R.string.third_party_title)) }
                 HorizontalDivider(Modifier.padding(vertical = 20.dp))
                 Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_010), style = MaterialTheme.typography.titleSmall)
-                Text("播放 ${metrics.plays} 次 · 最近首播 ${metrics.firstAudioMs?.let { "$it ms" } ?: "未测量"}\n缓冲 ${metrics.buffers} 次 · 解析失败 ${metrics.resolveFailures} 次 · 音频缓存字节占比 ${metrics.cachePercent}%",
+                Text("播放尝试 ${metrics.plays} 次 · 播放就绪 ${metrics.firstAudioMs?.let { "$it ms" } ?: "未测量"} · 音频输出 ${metrics.audioOutputMs?.let { "$it ms" } ?: "未测量"}\n再缓冲 ${metrics.rebufferCount} 次 · 总缓冲 ${metrics.bufferedMs} ms · 解析失败 ${metrics.resolveFailures} 次 · 音频缓存字节占比 ${metrics.cachePercent}%",
                     style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp))
                 Text(stringResource(com.pickaudio.R.string.ui_settingsscreen_011), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp))

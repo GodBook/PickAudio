@@ -11,11 +11,13 @@ import com.pickaudio.data.model.ThemeColor
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 val Context.dataStore by preferencesDataStore(name = "pickaudio_settings")
 
 class UserPreferences(private val context: Context) {
     private val gson = Gson()
+    private fun <T> observe(read: (Preferences) -> T): Flow<T> = context.dataStore.data.map(read).distinctUntilChanged()
 
     companion object {
         val KEY_THEME = stringPreferencesKey("theme_mode")
@@ -32,7 +34,7 @@ class UserPreferences(private val context: Context) {
         private val KEY_RESTORE_SESSION = stringPreferencesKey("last_restore_session")
     }
 
-    val themeMode: Flow<ThemeMode> = context.dataStore.data.map { prefs ->
+    val themeMode: Flow<ThemeMode> = observe { prefs ->
         val name = prefs[KEY_THEME] ?: ThemeMode.SYSTEM.name
         try { ThemeMode.valueOf(name) } catch (e: Exception) { ThemeMode.SYSTEM }
     }
@@ -41,7 +43,7 @@ class UserPreferences(private val context: Context) {
         context.dataStore.edit { it[KEY_THEME] = mode.name }
     }
 
-    val themeColor: Flow<ThemeColor> = context.dataStore.data.map { prefs ->
+    val themeColor: Flow<ThemeColor> = observe { prefs ->
         ThemeColor.fromName(prefs[KEY_THEME_COLOR])
     }
 
@@ -49,7 +51,7 @@ class UserPreferences(private val context: Context) {
         context.dataStore.edit { it[KEY_THEME_COLOR] = color.name }
     }
 
-    val filterShortAudio: Flow<Boolean> = context.dataStore.data.map { prefs ->
+    val filterShortAudio: Flow<Boolean> = observe { prefs ->
         prefs[KEY_FILTER_SHORT_AUDIO] ?: true // default true: filter <30s
     }
 
@@ -57,7 +59,7 @@ class UserPreferences(private val context: Context) {
         context.dataStore.edit { it[KEY_FILTER_SHORT_AUDIO] = enabled }
     }
 
-    val defaultOnlineQuality: Flow<Quality> = context.dataStore.data.map { prefs ->
+    val defaultOnlineQuality: Flow<Quality> = observe { prefs ->
         Quality.fromValue(prefs[KEY_DEFAULT_ONLINE_QUALITY] ?: "128k")
     }
 
@@ -65,7 +67,7 @@ class UserPreferences(private val context: Context) {
         context.dataStore.edit { it[KEY_DEFAULT_ONLINE_QUALITY] = quality.value }
     }
 
-    val defaultDownloadQuality: Flow<Quality> = context.dataStore.data.map { prefs ->
+    val defaultDownloadQuality: Flow<Quality> = observe { prefs ->
         Quality.fromValue(prefs[KEY_DEFAULT_DOWNLOAD_QUALITY] ?: "320k")
     }
 
@@ -73,7 +75,7 @@ class UserPreferences(private val context: Context) {
         context.dataStore.edit { it[KEY_DEFAULT_DOWNLOAD_QUALITY] = quality.value }
     }
 
-    val wifiOnlyDownload: Flow<Boolean> = context.dataStore.data.map { prefs ->
+    val wifiOnlyDownload: Flow<Boolean> = observe { prefs ->
         prefs[KEY_WIFI_ONLY_DOWNLOAD] ?: true
     }
 
@@ -81,7 +83,7 @@ class UserPreferences(private val context: Context) {
         context.dataStore.edit { it[KEY_WIFI_ONLY_DOWNLOAD] = enabled }
     }
 
-    val recentTrackIds: Flow<List<String>> = context.dataStore.data.map { prefs ->
+    val recentTrackIds: Flow<List<String>> = observe { prefs ->
         prefs[KEY_RECENT_TRACKS]?.split('|')?.filter { it.isNotBlank() } ?: emptyList()
     }
 
@@ -92,9 +94,9 @@ class UserPreferences(private val context: Context) {
         }
     }
 
-    val lyricFontSize: Flow<Int> = context.dataStore.data.map { (it[KEY_LYRIC_SIZE] ?: 18).coerceIn(14, 28) }
-    val showLyricTranslation: Flow<Boolean> = context.dataStore.data.map { it[KEY_LYRIC_TRANSLATION] ?: true }
-    val audioCacheMegabytes: Flow<Int> = context.dataStore.data.map { (it[KEY_AUDIO_CACHE_MB] ?: 256).takeIf { n -> n in listOf(64, 256, 1024) } ?: 256 }
+    val lyricFontSize: Flow<Int> = observe { (it[KEY_LYRIC_SIZE] ?: 18).coerceIn(14, 28) }
+    val showLyricTranslation: Flow<Boolean> = observe { it[KEY_LYRIC_TRANSLATION] ?: true }
+    val audioCacheMegabytes: Flow<Int> = observe { (it[KEY_AUDIO_CACHE_MB] ?: 256).takeIf { n -> n in listOf(64, 256, 1024) } ?: 256 }
     suspend fun setAudioCacheMegabytes(value: Int) { require(value in listOf(64, 256, 1024)); context.dataStore.edit { it[KEY_AUDIO_CACHE_MB] = value } }
     suspend fun setLyricFontSize(value: Int) { context.dataStore.edit { it[KEY_LYRIC_SIZE] = value.coerceIn(14, 28) } }
     suspend fun setShowLyricTranslation(value: Boolean) { context.dataStore.edit { it[KEY_LYRIC_TRANSLATION] = value } }
@@ -129,7 +131,7 @@ class UserPreferences(private val context: Context) {
         }
     }
 
-    val searchHistory: Flow<List<String>> = context.dataStore.data.map { prefs ->
+    val searchHistory: Flow<List<String>> = observe { prefs ->
         val json = prefs[KEY_SEARCH_HISTORY]
         if (json.isNullOrEmpty()) emptyList()
         else {
