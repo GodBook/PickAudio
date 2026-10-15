@@ -20,6 +20,9 @@ import com.pickaudio.data.repository.PlaylistRepository
 import com.pickaudio.download.DownloadCoordinator
 import com.pickaudio.download.DownloadBatchReport
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import com.pickaudio.online.VersionMatcher
 import com.pickaudio.source.LxSourceManager
 import kotlinx.coroutines.launch
@@ -32,12 +35,21 @@ fun PlaybackQualityDialog(track: Track, sourceManager: LxSourceManager, current:
     val selections by remember(sourceManager) { sourceManager.getPlatformSelections() }.collectAsStateWithLifecycle(initialValue = emptyList())
     var qualities by remember(track.id) { mutableStateOf<List<String>?>(null) }
     var saveDefault by remember { mutableStateOf(false) }
-    LaunchedEffect(track.platform, sources, selections) { qualities = track.platform?.let { sourceManager.supportedQualities(it) }.orEmpty() }
+    var capabilityError by remember { mutableStateOf<String?>(null) }
+    var capabilityRetry by remember { mutableIntStateOf(0) }
+    LaunchedEffect(track.platform, sources, selections, capabilityRetry) {
+        capabilityError = null; qualities = null
+        try { qualities = track.platform?.let { sourceManager.supportedQualities(it) }.orEmpty() }
+        catch (e: TimeoutCancellationException) { currentCoroutineContext().ensureActive(); qualities = emptyList(); capabilityError = "音源初始化超时，请重试" }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { qualities = emptyList(); capabilityError = "读取音源失败，请重试或更换音源" }
+    }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_003)) }, text = {
         Column {
             actual?.let { Text("当前文件 · $it") }
             Text(stringResource(com.pickaudio.R.string.ui_musicactions_001), style = MaterialTheme.typography.bodySmall)
             if (qualities == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+            capabilityError?.let { Text(it, color = MaterialTheme.colorScheme.error); TextButton(onClick = { capabilityRetry++ }) { Text("重试读取音源") } }
             if (qualities?.isEmpty() == true) Text(if (track.platform == null) "本地文件的编码由文件本身决定。" else "当前音源没有可选音质，请更换音源。")
             qualities.orEmpty().forEach { quality ->
                 Row(Modifier.fillMaxWidth().clickable { onChoose(quality, saveDefault) }, verticalAlignment = Alignment.CenterVertically) {
@@ -105,16 +117,25 @@ fun DownloadQualityDialog(
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var report by remember { mutableStateOf<DownloadBatchReport?>(null) }
+    var capabilityRetry by remember { mutableIntStateOf(0) }
+    var capabilityError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(online, sources, selections, defaultQuality) {
-        val supported = online.map { sourceManager.supportedQualities(it.platform!!) }.reduceOrNull { a, b -> a.intersect(b.toSet()).toList() }.orEmpty()
-        qualities = supported
-        selected = defaultQuality.value.takeIf { it in supported } ?: supported.firstOrNull()
+    LaunchedEffect(online, sources, selections, defaultQuality, capabilityRetry) {
+        capabilityError = null; qualities = null; selected = null
+        try {
+            val supported = online.mapNotNull { it.platform }.distinct().map { sourceManager.supportedQualities(it) }
+                .reduceOrNull { a, b -> a.intersect(b.toSet()).toList() }.orEmpty()
+            qualities = supported
+            selected = defaultQuality.value.takeIf { it in supported } ?: supported.firstOrNull()
+        } catch (e: TimeoutCancellationException) { currentCoroutineContext().ensureActive(); qualities = emptyList(); capabilityError = "音源初始化超时，请重试" }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { qualities = emptyList(); capabilityError = "读取音源失败，请重试或更换音源" }
     }
     AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, title = { Text("下载音乐 · ${online.size} 首") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(com.pickaudio.R.string.ui_musicactions_006), style = MaterialTheme.typography.bodySmall)
             if (qualities == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+            capabilityError?.let { Text(it, color = MaterialTheme.colorScheme.error); TextButton(onClick = { capabilityRetry++ }) { Text("重试读取音源") } }
             if (qualities?.isEmpty() == true) {
                 Text(stringResource(com.pickaudio.R.string.ui_musicactions_007))
                 TextButton(onClick = { onDismiss(); onOpenSource() }) { Text(stringResource(com.pickaudio.R.string.ui_searchscreen_009)) }
@@ -137,15 +158,16 @@ fun DownloadQualityDialog(
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         }
     }, confirmButton = { Button(enabled = !busy && selected != null && online.isNotEmpty(), onClick = {
+        val quality = selected ?: return@Button
         busy = true
         scope.launch {
             try {
-                val result = coordinator.enqueueBatch(report?.failures?.map { it.track } ?: tracks, selected!!)
+                val result = coordinator.enqueueBatch(report?.failures?.map { it.track } ?: tracks, quality)
                 val combined = report?.let { previous -> result.copy(added = previous.added + result.added,
                     resumed = previous.resumed + result.resumed, existing = previous.existing + result.existing,
                     skipped = previous.skipped + result.skipped) } ?: result
                 report = combined
-                if (rememberChoice) preferences.setDefaultDownloadQuality(Quality.fromValue(selected!!))
+                if (rememberChoice) preferences.setDefaultDownloadQuality(Quality.fromValue(quality))
                 onQueued(combined)
                 if (result.failures.isEmpty()) onDismiss()
             } catch (e: CancellationException) { throw e }

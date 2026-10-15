@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
@@ -35,7 +36,7 @@ class RelinkConflictException(val otherTrackId: String, val otherTitle: String) 
 data class ImportProgress(
     val running: Boolean = false, val label: String = "", val processed: Int = 0,
     val total: Int? = null, val imported: Int = 0, val skipped: Int = 0, val failed: Int = 0,
-    val message: String? = null
+    val message: String? = null, val updated: Int = 0, val shortSkipped: Int = 0
 )
 
 class LibraryRepository(
@@ -57,6 +58,20 @@ class LibraryRepository(
     private val _importProgress = MutableStateFlow(ImportProgress())
     val importProgress = _importProgress.asStateFlow()
     private var knownAssets: MutableMap<String, LocalAssetEntity> = ConcurrentHashMap()
+    private val fingerprints = ImportFingerprints(context)
+    private var artworkDirty = false
+    private var artworkBytesSincePrune = 0L
+
+    private fun fileStamp(uri: Uri, sizeHint: Long? = null, modifiedHint: Long? = null): String? = runCatching {
+        if (uri.scheme == "file") File(uri.path.orEmpty()).let { importStamp(it.length(), it.lastModified()) }
+        else if (sizeHint != null && modifiedHint != null) importStamp(sizeHint, modifiedHint)
+        else {
+            val date = if (uri.authority == "media") MediaStore.MediaColumns.DATE_MODIFIED else DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE, date), null, null, null)?.use {
+                if (it.moveToFirst()) importStamp(it.getLong(0), it.getLong(1)) else null
+            }
+        }
+    }.getOrNull()
 
     private fun identity(uri: Uri): String {
         val media = if (uri.authority == "media") uri else runCatching { MediaStore.getMediaUri(context, uri) }.getOrNull() ?: uri
@@ -124,7 +139,6 @@ class LibraryRepository(
         _importProgress.value = ImportProgress(running = true, label = label)
         importJob = scope.launch {
             try {
-                prepareAssetIndex()
                 operation()
                 _importProgress.value = _importProgress.value.copy(running = false, message = "导入完成")
             } catch (e: CancellationException) {
@@ -132,13 +146,14 @@ class LibraryRepository(
                 throw e
             } catch (e: Exception) {
                 _importProgress.value = _importProgress.value.copy(running = false, message = "${e.message ?: "导入失败，请检查授权"}")
-            }
+            } finally { withContext(NonCancellable) { fingerprints.flush(); pruneArtwork() } }
         }
     }
 
     fun startScan(filterShortAudio: Boolean) = startImport("扫描手机歌曲") { scanMediaStore(filterShortAudio) }
     fun startDirectoryImport(uri: Uri) = startImport("导入文件夹") { importSafDirectory(uri) }
     fun startFileImport(uris: List<Uri>) = startImport("导入音频文件") {
+        prepareAssetIndex()
         _importProgress.value = _importProgress.value.copy(total = uris.size)
         uris.forEach { importCountedFile(it) }
     }
@@ -187,19 +202,29 @@ class LibraryRepository(
         val directory = File(context.cacheDir, "embedded_covers").apply { mkdirs() }
         val name = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
         val file = File(directory, "$name.img")
-        if (!file.exists()) {
+        val newArtwork = !file.exists()
+        if (newArtwork) {
             val temporary = File(directory, "$name-${UUID.randomUUID()}.tmp")
             try {
                 temporary.outputStream().use { it.write(bytes) }
                 check(temporary.renameTo(file) || file.isFile) { "无法保存内嵌封面" }
             } finally { temporary.delete() }
         }
-        var size = directory.listFiles().orEmpty().sumOf { it.length() }
-        directory.listFiles().orEmpty().sortedBy { it.lastModified() }.forEach {
-            val length = it.length()
-            if (size > 32 * 1024 * 1024 && it != file && it.delete()) size -= length
-        }
+        if (newArtwork) { artworkDirty = true; artworkBytesSincePrune += bytes.size }
+        if (artworkBytesSincePrune >= 8 * 1024 * 1024) pruneArtwork(file)
         return Uri.fromFile(file).toString()
+    }
+    private fun pruneArtwork(protected: File? = null) {
+        if (!artworkDirty) return
+        val files = File(context.cacheDir, "embedded_covers").listFiles().orEmpty().filter { it.isFile }
+        var size = files.sumOf { it.length() }
+        files.sortedBy { it.lastModified() }.forEach { file ->
+            if (size > 32 * 1024 * 1024 && file != protected) {
+                val length = file.length()
+                if (file.delete()) size -= length
+            }
+        }
+        artworkDirty = false; artworkBytesSincePrune = 0
     }
     private fun volumeLabel(volume: String): String = context.getSystemService(android.os.storage.StorageManager::class.java)
         .storageVolumes.firstOrNull { if (volume in setOf("primary", "external_primary")) it.isPrimary else it.uuid.equals(volume, true) }
@@ -208,11 +233,13 @@ class LibraryRepository(
     private suspend fun importCountedFile(uri: Uri, folder: String = "") {
         currentCoroutineContext().ensureActive()
         val duplicate = localAssetDao.getAssetByUri(uri.toString()) != null || identity(uri) in knownAssets
+        val unchanged = fingerprints.matches(uri.toString(), fileStamp(uri))
         val success = importSafFile(uri, folder)
         val old = _importProgress.value
         _importProgress.value = old.copy(processed = old.processed + 1,
             imported = old.imported + if (success && !duplicate) 1 else 0,
-            skipped = old.skipped + if (success && duplicate) 1 else 0,
+            skipped = old.skipped + if (success && duplicate && unchanged) 1 else 0,
+            updated = old.updated + if (success && duplicate && !unchanged) 1 else 0,
             failed = old.failed + if (!success) 1 else 0)
     }
 
@@ -230,7 +257,8 @@ class LibraryRepository(
         }
     }
 
-    private val tracksFlow = combine(trackDao.getLibraryTracks(), favoriteDao.getAllFavoriteTrackIds(), localAssetDao.getAllAssets(), database.onlineRefDao().getAllRefs()) { list, favIds, allAssets, allRefs ->
+    private val tracksFlow = combine(trackDao.getLibraryTracks().distinctUntilChanged(), favoriteDao.getAllFavoriteTrackIds().distinctUntilChanged(),
+        localAssetDao.getLibraryAssets().distinctUntilChanged(), database.onlineRefDao().getLibraryRefs().distinctUntilChanged()) { list, favIds, allAssets, allRefs ->
             val favSet = favIds.toSet()
             val assetsByTrack = allAssets.groupBy { it.trackId }
             val refsByTrack = allRefs.groupBy { it.trackId }
@@ -238,7 +266,7 @@ class LibraryRepository(
                 val assets = assetsByTrack[entity.id].orEmpty()
                 entity.toTrack(assets, refsByTrack[entity.id].orEmpty(), favSet.contains(entity.id))
             }
-        }.flowOn(Dispatchers.Default)
+        }.distinctUntilChanged().flowOn(Dispatchers.Default)
     fun getAllTracks(): Flow<List<Track>> = tracksFlow
     suspend fun getTrack(id: String): Track? = withContext(Dispatchers.IO) {
         database.withTransaction {
@@ -256,7 +284,7 @@ class LibraryRepository(
         val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.ALBUM, MediaStore.Audio.Media.DURATION, MediaStore.Audio.Media.SIZE,
             MediaStore.Audio.Media.MIME_TYPE, MediaStore.Audio.Media.ALBUM_ID, MediaStore.Audio.Media.RELATIVE_PATH,
-            MediaStore.Audio.Media.DISPLAY_NAME)
+            MediaStore.Audio.Media.DISPLAY_NAME, MediaStore.Audio.Media.DATE_MODIFIED, MediaStore.MediaColumns.GENERATION_MODIFIED)
         var imported = 0
         for (volume in MediaStore.getExternalVolumeNames(context)) {
             currentCoroutineContext().ensureActive()
@@ -274,7 +302,19 @@ class LibraryRepository(
                     seen.add(key)
                     val existing = knownAssets[key]
                     val duration = it.getLong(4)
-                    if (filterShortAudio && duration < 30000 && existing == null) continue
+                    if (filterShortAudio && duration < 30000 && existing == null) {
+                        _importProgress.value = _importProgress.value.copy(processed = _importProgress.value.processed + 1,
+                            skipped = _importProgress.value.skipped + 1, shortSkipped = _importProgress.value.shortSkipped + 1)
+                        continue
+                    }
+                    val stamp = importStamp(it.getLong(5), it.getLong(10), it.getLong(11))
+                    val unchanged = existing != null && existing.isAvailable && fingerprints.matches(uri.toString(), stamp)
+                    if (unchanged) {
+                        trackDao.addToLibrary(existing!!.trackId, System.currentTimeMillis())
+                        _importProgress.value = _importProgress.value.copy(processed = _importProgress.value.processed + 1,
+                            skipped = _importProgress.value.skipped + 1)
+                        continue
+                    }
                     val title = it.getString(1) ?: "未知歌曲"
                     val artist = it.getString(2) ?: "未知歌手"
                     val album = it.getString(3) ?: "未知专辑"
@@ -290,19 +330,20 @@ class LibraryRepository(
                         fileSize = it.getLong(5), mimeType = mime, format = name.substringAfterLast('.', "audio").lowercase())).copy(
                         uri = uri.toString(), fileSize = it.getLong(5), mimeType = mime, folderName = "$displayVolume / $folder",
                         folderId = "$volume:$folder", fileName = name, isAvailable = true, unavailableReason = null,
-                        audioInfoJson = existing?.audioInfoJson?.takeIf { _ -> existing.fileSize == it.getLong(5) && existing.mimeType == mime })
+                        audioInfoJson = existing?.audioInfoJson?.takeIf { _ -> fingerprints.matches(uri.toString(), stamp) })
                     val saved = database.withTransaction {
                         val duplicate = localAssetDao.getAssetByUri(uri.toString())
                         val canonical = if (existing == null && duplicate != null) duplicate else asset
-                        if (canonical.trackId == record.id) trackDao.insertOrUpdate(record)
+                        if (canonical.trackId == record.id) { if (previous != record) trackDao.insertOrUpdate(record) }
                         else trackDao.addToLibrary(canonical.trackId, System.currentTimeMillis())
-                        canonical.copy(id = localAssetDao.insertOrUpdate(canonical))
+                        if (duplicate == canonical) canonical else canonical.copy(id = localAssetDao.insertOrUpdate(canonical))
                     }
                     knownAssets[key] = saved
+                    fingerprints.record(uri.toString(), stamp)
                     if (existing == null) imported++
                     _importProgress.value = _importProgress.value.copy(imported = imported,
                         processed = _importProgress.value.processed + 1,
-                        skipped = _importProgress.value.skipped + if (existing != null) 1 else 0)
+                        updated = _importProgress.value.updated + if (existing != null) 1 else 0)
                 }
             }
             // Reconcile only successfully queried volumes; valid files excluded by the music filter stay available.
@@ -313,19 +354,33 @@ class LibraryRepository(
                 localAssetDao.updateAvailability(it.id, access.available, access.reason)
             }
         }
+        fingerprints.flush(); pruneArtwork()
         imported
     }
 
     suspend fun importSafFile(uri: Uri, folder: String = "", folderId: String = "", nameHint: String? = null,
-        sizeHint: Long? = null, fromDirectory: Boolean = false): Boolean = withContext(Dispatchers.IO) {
+        sizeHint: Long? = null, fromDirectory: Boolean = false, modifiedHint: Long? = null): Boolean = withContext(Dispatchers.IO) {
         try {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            val metadata = AndroidAudioProbe.inspect(context, uri, artwork = true)
             val uriString = uri.toString()
             val existing = localAssetDao.getAssetByUri(uriString) ?: knownAssets[identity(uri)]
+            val stamp = fileStamp(uri, sizeHint, modifiedHint)
+            val existingRecord = existing?.let { trackDao.getTrackById(it.trackId) }
+            val coverPresent = existingRecord?.coverUri?.let { value ->
+                val cover = Uri.parse(value)
+                cover.scheme != "file" || File(cover.path.orEmpty()).isFile
+            } ?: true
+            if (existing != null && existing.isAvailable && coverPresent && AudioInfo.decode(existing.audioInfoJson) != null && fingerprints.matches(uriString, stamp)) {
+                val updated = existing.copy(folderName = folder.ifBlank { existing.folderName }, folderId = folderId.ifBlank { existing.folderId },
+                    fileName = nameHint ?: existing.fileName, sourceType = if (fromDirectory) "SAF_DIR" else existing.sourceType)
+                if (updated != existing) { localAssetDao.insertOrUpdate(updated); knownAssets[identity(uri)] = updated }
+                trackDao.addToLibrary(existing.trackId, System.currentTimeMillis())
+                return@withContext true
+            }
+            val metadata = AndroidAudioProbe.inspect(context, uri, artwork = true)
             val name = nameHint ?: fileName(uri)
             val trackId = existing?.trackId ?: UUID.randomUUID().toString()
-            val old = trackDao.getTrackById(trackId)
+            val old = existingRecord
             val title = metadata.title?.takeIf { it.isNotBlank() } ?: old?.title ?: name.substringBeforeLast('.').ifBlank { "未知歌曲" }
             val record = (old ?: TrackEntity(trackId, title, metadata.artist ?: "未知歌手", metadata.album ?: "未知专辑", metadata.durationMs, null))
                 .copy(title = title.take(2000), artist = (metadata.artist ?: old?.artist ?: "未知歌手").take(2000),
@@ -348,12 +403,13 @@ class LibraryRepository(
                 }
             }
             knownAssets[identity(uri)] = saved
+            fingerprints.record(uriString, stamp)
             true
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { false }
     }
 
-    private data class DirectoryEntry(val uri: Uri, val name: String, val mime: String, val size: Long)
+    private data class DirectoryEntry(val uri: Uri, val name: String, val mime: String, val size: Long, val modified: Long)
     suspend fun importSafDirectory(treeUri: Uri): Int = withContext(Dispatchers.IO) {
         runCatching { context.contentResolver.takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         prepareAssetIndex()
@@ -377,10 +433,10 @@ class LibraryRepository(
             val children = mutableListOf<DirectoryEntry>()
             context.contentResolver.query(childrenUri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                 DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE,
-                DocumentsContract.Document.COLUMN_SIZE), null, null, null)?.use { cursor ->
+                DocumentsContract.Document.COLUMN_SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED), null, null, null)?.use { cursor ->
                 while (cursor.moveToNext()) children.add(DirectoryEntry(
                     DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(0)),
-                    cursor.getString(1).orEmpty(), cursor.getString(2).orEmpty(), cursor.getLong(3)))
+                    cursor.getString(1).orEmpty(), cursor.getString(2).orEmpty(), cursor.getLong(3), cursor.getLong(4)))
             } ?: error("无法读取文件夹，请重新授权")
             val lyrics = children.filter { it.name.endsWith(".lrc", true) }.associateBy { it.name.substringBeforeLast('.').lowercase() }
             for (child in children) {
@@ -389,10 +445,12 @@ class LibraryRepository(
                     directories.add(DocumentsContract.getDocumentId(child.uri) to "$path / ${child.name}")
                 } else if (child.mime.startsWith("audio/") || child.name.substringAfterLast('.').lowercase() in setOf("mp3", "flac", "m4a", "wav", "ogg", "aac", "opus", "alac")) {
                     val duplicate = identity(child.uri) in knownAssets || localAssetDao.getAssetByUri(child.uri.toString()) != null
-                    val success = importSafFile(child.uri, path, folderUri.toString(), child.name, child.size, true)
+                    val unchanged = fingerprints.matches(child.uri.toString(), importStamp(child.size, child.modified))
+                    val success = importSafFile(child.uri, path, folderUri.toString(), child.name, child.size, true, child.modified)
                     if (success && !duplicate) count++
                     _importProgress.value = _importProgress.value.copy(processed = _importProgress.value.processed + 1,
-                        imported = count, skipped = _importProgress.value.skipped + if (success && duplicate) 1 else 0,
+                        imported = count, skipped = _importProgress.value.skipped + if (success && duplicate && unchanged) 1 else 0,
+                        updated = _importProgress.value.updated + if (success && duplicate && !unchanged) 1 else 0,
                         failed = _importProgress.value.failed + if (!success) 1 else 0)
                     if (success) lyrics[child.name.substringBeforeLast('.').lowercase()]?.let { lyric ->
                         val asset = localAssetDao.getAssetByUri(child.uri.toString())
@@ -403,6 +461,7 @@ class LibraryRepository(
                 }
             }
         }
+        fingerprints.flush(); pruneArtwork()
         count
     }
 

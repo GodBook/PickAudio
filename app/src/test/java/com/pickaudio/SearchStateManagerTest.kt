@@ -9,6 +9,17 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SearchStateManagerTest {
+    @Test fun visibleSelectionScopeMatchesSummaryAndSelectedPlatform() = runTest {
+        val manager = SearchStateManager(this) { platform, _, _ -> (1..20).map { song(platform, "$it") } }
+        manager.submit("范围"); advanceUntilIdle()
+        assertEquals(40, manager.searchResults.size)
+        assertEquals(10, manager.visibleResults.size)
+        manager.selectPlatform(Platform.QQ)
+        assertEquals(20, manager.visibleResults.size)
+        assertTrue(manager.visibleResults.all { it.platform == "tx" })
+        manager.clear()
+        assertTrue(manager.visibleResults.isEmpty())
+    }
     @Test fun duplicateFullPageStopsAndSwitchingSourceKeepsLoadedResults() = runTest {
         var requests = 0
         val manager = SearchStateManager(this) { platform, _, _ -> requests++; (1..20).map { song(platform, it.toString()) } }

@@ -44,8 +44,11 @@ sealed class Screen(val route: String, val title: String) {
     }
 }
 val LocalPlayerOverlayVisible = staticCompositionLocalOf { false }
+private data class SourceReturn(val platform: String?, val entryId: Long?, val configuration: String)
 
 class MainActivity : ComponentActivity() {
+    override fun onStart() { super.onStart(); (application as PickAudioApplication).playbackCoordinator.setUiVisible(true) }
+    override fun onStop() { (application as PickAudioApplication).playbackCoordinator.setUiVisible(false); super.onStop() }
     var openDownloadsVersion by mutableIntStateOf(0)
         private set
     override fun onNewIntent(intent: android.content.Intent) {
@@ -86,16 +89,21 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
     var showFullPlayer by rememberSaveable { mutableStateOf(false) }
     var pendingOpenPlayer by rememberSaveable { mutableStateOf(false) }
     val restored by coordinator.restored.collectAsStateWithLifecycle()
-    var retryAfterSource by remember { mutableStateOf(false) }
+    var sourceReturn by remember { mutableStateOf<SourceReturn?>(null) }
     var currentRoute by remember { mutableStateOf(Screen.Library.route) }
     LaunchedEffect(currentTrack?.id, restored) { if (currentTrack == null && restored) showFullPlayer = false }
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val activeRoute = navBackStackEntry?.destination?.route ?: currentRoute
     LaunchedEffect(activeRoute) {
-        if (activeRoute != Screen.SourceManager.route && retryAfterSource) {
-            retryAfterSource = false
-            coordinator.retryCurrent()
+        val pending = sourceReturn
+        if (activeRoute != Screen.SourceManager.route && pending != null) {
+            sourceReturn = null
             showFullPlayer = true
+            try {
+                if (pending.platform != null && pending.configuration != app.sourceManager.configurationToken(pending.platform))
+                    coordinator.retryAfterSourceChange(pending.entryId)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { mainSnackbar.showSnackbar(e.message ?: "音源读取失败，请重试") }
         }
     }
     LaunchedEffect((context as? MainActivity)?.openDownloadsVersion) {
@@ -296,9 +304,18 @@ fun MainApp(app: PickAudioApplication, searchStateManager: SearchStateManager = 
                     },
                     isFavorite = isCurrentFav
                     , onOpenSource = {
-                        showFullPlayer = false
-                        retryAfterSource = true
-                        navController.navigate(Screen.SourceManager.route)
+                        scope.launch {
+                            val platform = coordinator.sourcePlatformForCurrent()
+                            val entryId = coordinator.queueEntries.value.getOrNull(coordinator.currentIndex.value)?.id
+                            try {
+                                val token = platform?.let { app.sourceManager.configurationToken(it) }.orEmpty()
+                                val unchangedEntry = coordinator.queueEntries.value.getOrNull(coordinator.currentIndex.value)?.id == entryId
+                                sourceReturn = SourceReturn(if (unchangedEntry) platform else null, entryId, token)
+                                showFullPlayer = false
+                                navController.navigate(Screen.SourceManager.route)
+                            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                            catch (e: Exception) { mainSnackbar.showSnackbar(e.message ?: "音源读取失败，请重试") }
+                        }
                     },
                     onClearQueue = {
                         coordinator.clearQueue()

@@ -26,6 +26,10 @@ class SearchStateManager(
         private set
     val isSearching: Boolean get() = platformStates.values.any { it.loading && it.items.isEmpty() }
     val searchResults: List<SearchSongItem> get() = platformStates.values.flatMap { it.items }
+    val visiblePlatformStates: Map<String, PlatformSearchState> get() = platformStates
+        .filterKeys { selectedPlatform == Platform.ALL || it == selectedPlatform.id }
+        .mapValues { (_, state) -> if (selectedPlatform == Platform.ALL) state.copy(items = state.items.take(5)) else state }
+    val visibleResults: List<SearchSongItem> get() = visiblePlatformStates.values.flatMap { it.items }
     private var generation = 0L
     private val jobs = mutableMapOf<String, Job>()
     fun selectPlatform(platform: Platform) {

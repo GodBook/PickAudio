@@ -42,7 +42,9 @@ class DownloadCoordinator(
     private val publicationCheckpoint: (suspend (String) -> Unit)? = null
 ) {
     private val downloadDao = database.downloadDao()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
+        android.util.Log.e("Downloads", "Download command failed", error)
+    })
     private val commands = Mutex()
     private val runnerMutex = Mutex()
     private val recoveryMutex = Mutex()
@@ -64,18 +66,32 @@ class DownloadCoordinator(
         catch (e: CancellationException) { throw e }
         catch (e: Exception) { android.util.Log.e("Downloads", "Interrupted download recovery failed", e) }
     } }
-    private val tasksFlow = downloadDao.getAllTasks().distinctUntilChanged()
+    private data class TransferProgress(val generation: Long, val bytes: Long, val total: Long, val speed: Long, val eta: Long?)
+    private val liveProgress = MutableStateFlow<Map<String, TransferProgress>>(emptyMap())
+    private fun withProgress(flow: Flow<List<DownloadTaskEntity>>) = combine(flow, liveProgress) { tasks, progress ->
+        tasks.map { task -> progress[task.id]?.takeIf { it.generation == task.executionGeneration && task.status == "DOWNLOADING" }
+            ?.let { task.copy(downloadedBytes = it.bytes, totalBytes = it.total, bytesPerSecond = it.speed, etaSeconds = it.eta) } ?: task }
+    }.distinctUntilChanged()
+    private val tasksFlow = withProgress(downloadDao.getAllTasks()).shareIn(scope, SharingStarted.WhileSubscribed(5000), 1)
     val pendingCount = downloadDao.getPendingCount().distinctUntilChanged()
+    val taskCounts = downloadDao.getStateCounts().map { rows -> rows.associate { it.status to it.count } }.distinctUntilChanged()
+    val notificationTasks = downloadDao.getNotificationTasks().distinctUntilChanged()
     fun getAllTasks(): Flow<List<DownloadTaskEntity>> = tasksFlow
+    fun getTasksForTab(tab: Int, limit: Int): Flow<List<DownloadTaskEntity>> {
+        val records = downloadDao.getTasksForStatuses(when (tab) {
+            0 -> ACTIVE_STATES.toList() + "PENDING"; 1 -> listOf("COMPLETED"); else -> listOf("PAUSED", "FAILED", "CANCELLED") }, limit)
+        return if (tab == 0) withProgress(records).flowOn(Dispatchers.Default) else records.distinctUntilChanged()
+    }
     private fun part(id: String): File {
         require(id.matches(Regex("[A-Za-z0-9_-]{1,100}"))) { "下载任务编号无效" }
         return File(partialDirectory, "temp_${id}.part")
     }
 
     suspend fun enqueueDownload(trackId: String, title: String, artist: String, album: String, coverUri: String?,
-        platform: String, platformSongId: String, quality: String? = null, durationMs: Long = 0, metadataJson: String = "{}"): String {
+        platform: String, platformSongId: String, quality: String? = null, durationMs: Long = 0, metadataJson: String = "{}",
+        scheduleNow: Boolean = true, supportedOverride: List<String>? = null): String {
         val desired = quality ?: preferences.defaultDownloadQuality.first().value
-        require(desired in sourceManager.supportedQualities(platform)) { "当前音源不支持所选音质，请选择支持的音质或更换音源" }
+        require(desired in (supportedOverride ?: sourceManager.supportedQualities(platform))) { "当前音源不支持所选音质，请选择支持的音质或更换音源" }
         recoverInterrupted()
         val id = commands.withLock {
             val existing = downloadDao.getTaskByPlatformSong(platform, platformSongId, desired)
@@ -106,28 +122,30 @@ class DownloadCoordinator(
                 task.id
             }
         }
-        schedule()
+        if (scheduleNow) schedule()
         return id
     }
 
-    private suspend fun schedule(force: Boolean = false) {
-        if (commands.withLock { (runnerJob?.isActive == true).also { if (it) wake.trySend(Unit) } }) return
-        if (scheduleOverride != null) { scheduleOverride.invoke(); return }
-        try {
+    private suspend fun schedule(force: Boolean = false): Boolean {
+        if (commands.withLock { (runnerJob?.isActive == true).also { if (it) wake.trySend(Unit) } }) return true
+        if (scheduleOverride != null) { scheduleOverride.invoke(); return true }
+        return try {
             val scheduler = context.getSystemService(JobScheduler::class.java)
-            if (!force && scheduler.getPendingJob(JOB_ID) != null) return
+            if (!force && scheduler.getPendingJob(JOB_ID) != null) return true
             val builder = JobInfo.Builder(JOB_ID, ComponentName(context, DownloadJobService::class.java)).setUserInitiated(true)
             if (preferences.wifiOnlyDownload.first()) builder.setRequiredNetwork(NetworkRequest.Builder()
                 .addTransportType(NetworkCapabilities.TRANSPORT_WIFI).addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build())
             else builder.setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
             check(scheduler.schedule(builder.build()) == JobScheduler.RESULT_SUCCESS) { "系统暂未允许下载，请点击继续" }
+            true
         } catch (e: CancellationException) { throw e }
-        catch (e: Exception) { systemStopped(e.message ?: "系统暂未允许下载，请点击继续") }
+        catch (e: Exception) { systemStopped(e.message ?: "系统暂未允许下载，请点击继续"); false }
     }
     suspend fun enqueueBatch(tracks: List<Track>, quality: String): DownloadBatchReport {
         var added = 0; var resumed = 0; var existing = 0; var skipped = 0
         val failures = mutableListOf<DownloadBatchFailure>()
         val seen = HashSet<Pair<String, String>>()
+        val supported = tracks.mapNotNull { it.platform }.distinct().associateWith { sourceManager.supportedQualities(it) }
         for (track in tracks) {
             val platform = track.platform
             val songId = track.platformSongId
@@ -135,7 +153,7 @@ class DownloadCoordinator(
             try {
                 val previous = downloadDao.getTaskByPlatformSong(platform, songId, quality)
                 val id = enqueueDownload(track.id, track.title, track.artist, track.album, track.coverUri, platform, songId,
-                    quality, track.durationMs, track.platformMetadataJson)
+                    quality, track.durationMs, track.platformMetadataJson, scheduleNow = false, supportedOverride = supported[platform])
                 val current = downloadDao.getTaskById(id) ?: error("任务已移除，请重试")
                 when {
                     previous == null -> added++
@@ -145,6 +163,7 @@ class DownloadCoordinator(
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { failures.add(DownloadBatchFailure(track, e.message ?: "无法加入下载")) }
         }
+        if (added + resumed > 0) schedule()
         return DownloadBatchReport(added, resumed, existing, skipped, failures)
     }
 
@@ -221,7 +240,7 @@ class DownloadCoordinator(
             try {
                 while (isActive) {
                     val done = commands.withLock {
-                        val pending = downloadDao.getAllTasksSync().filter { it.status == "PENDING" }
+                        val pending = downloadDao.getPendingTasks()
                         pending.forEach { pendingGenerations[it.id] = it.executionGeneration }
                         pending.filter { it.id !in workers }.take((2 - workers.size).coerceAtLeast(0)).forEach { task ->
                             val claimed = task.copy(status = "RESOLVING", executionGeneration = task.executionGeneration + 1,
@@ -264,6 +283,7 @@ class DownloadCoordinator(
     private suspend fun failLease(id: String, generation: Long, status: String, message: String) = commands.withLock {
         val task = downloadDao.getTaskById(id)
         if (DownloadLease.canWrite(task, generation)) downloadDao.insertOrUpdate(task!!.copy(status = status,
+            downloadedBytes = part(id).takeIf { it.isFile }?.length() ?: task.downloadedBytes,
             errorMessage = message, bytesPerSecond = 0, etaSeconds = null, updatedAt = System.currentTimeMillis()))
     }
 
@@ -277,11 +297,19 @@ class DownloadCoordinator(
             workers[id]?.job?.also { it.cancel() }
         }
         job?.join()
+        commands.withLock {
+            val current = downloadDao.getTaskById(id)
+            if (current?.status == "PAUSED") downloadDao.insertOrUpdate(current.copy(downloadedBytes = part(id).takeIf { it.isFile }?.length() ?: 0,
+                bytesPerSecond = 0, etaSeconds = null))
+        }
     }
     fun resumeTask(id: String) { scope.launch { resumeAndSchedule(id) } }
 
-    suspend fun refreshCompletedFiles() {
-        downloadDao.getAllTasksSync().filter { it.status == "COMPLETED" }.forEach { reconcileCompleted(it) }
+    suspend fun refreshCompletedFiles(limit: Int = Int.MAX_VALUE) = withContext(Dispatchers.IO) {
+        downloadDao.getCompletedTasks(limit).forEach {
+            currentCoroutineContext().ensureActive()
+            reconcileCompleted(it)
+        }
     }
     private suspend fun reconcileCompleted(task: DownloadTaskEntity) {
         val access = task.targetUri?.let { com.pickaudio.data.repository.checkAssetAccess(context, Uri.parse(it)) }
@@ -297,7 +325,7 @@ class DownloadCoordinator(
                     downloadedBytes = 0, totalBytes = 0, resourceEtag = null))
         } }
     }
-    suspend fun resumeAndSchedule(id: String) {
+    suspend fun resumeAndSchedule(id: String, scheduleNow: Boolean = true) {
         commands.withLock {
             val task = downloadDao.getTaskById(id) ?: return@withLock
             if (task.status in listOf("PAUSED", "FAILED")) {
@@ -306,7 +334,7 @@ class DownloadCoordinator(
                 pendingGenerations[id] = pending.executionGeneration
             } else if (task.status == "PENDING") downloadDao.insertOrUpdate(task.copy(errorMessage = null))
         }
-        schedule(force = true)
+        if (scheduleNow) schedule(force = true)
         wake.trySend(Unit)
     }
 
@@ -359,6 +387,39 @@ class DownloadCoordinator(
     fun pauseAll(ids: List<String>) { scope.launch { ids.forEach { pauseAndWait(it) } } }
     fun resumeAll(ids: List<String>) { scope.launch { ids.forEach { resumeAndSchedule(it) } } }
     fun cancelAll(ids: List<String>) { scope.launch { ids.forEach { cancelAndWait(it) } } }
+    suspend fun controlBatch(ids: List<String>, command: DownloadCommand): DownloadControlReport = withContext(Dispatchers.IO) {
+        var changed = 0; var skipped = 0
+        val failures = mutableListOf<String>()
+        for (id in ids.distinct()) {
+            currentCoroutineContext().ensureActive()
+            try {
+                val before = downloadDao.getTaskById(id)
+                val allowed = before != null && when (command) {
+                    DownloadCommand.PAUSE -> before.status == "PENDING" || before.status in ACTIVE_STATES
+                    DownloadCommand.RESUME -> before.status in listOf("PAUSED", "FAILED", "PENDING")
+                    DownloadCommand.CANCEL -> before.status != "COMPLETED"
+                }
+                if (!allowed) { skipped++; continue }
+                when (command) {
+                    DownloadCommand.PAUSE -> pauseAndWait(id)
+                    DownloadCommand.RESUME -> resumeAndSchedule(id, scheduleNow = false)
+                    DownloadCommand.CANCEL -> cancelAndWait(id)
+                }
+                val after = downloadDao.getTaskById(id)
+                val applied = when (command) {
+                    DownloadCommand.PAUSE -> after?.status == "PAUSED"
+                    DownloadCommand.RESUME -> after?.status == "PENDING" || after?.status in ACTIVE_STATES
+                    DownloadCommand.CANCEL -> after == null || after.status == "CANCELLED"
+                }
+                if (applied) changed++ else skipped++
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { failures += e.message ?: "任务处理失败" }
+        }
+        val scheduled = try { command != DownloadCommand.RESUME || changed == 0 || schedule(force = true) }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { failures += e.message ?: "系统调度失败"; false }
+        DownloadControlReport(changed, skipped, failures, scheduled)
+    }
     fun dismissCandidates(id: String) { _versionCandidates.update { it - id } }
 
     suspend fun confirmVersion(taskId: String, item: SearchSongItem) {
@@ -429,7 +490,10 @@ class DownloadCoordinator(
                 throw CancellationException("下载已暂停", e)
             }
             failLease(id, generation, "FAILED", e.message ?: "下载失败，请重试")
-        } finally { reservations.remove(id) }
+        } finally {
+            reservations.remove(id)
+            liveProgress.update { if (it[id]?.generation == generation) it - id else it }
+        }
     }
 
     private suspend fun transfer(id: String, generation: Long, original: DownloadTaskEntity, file: File,
@@ -465,6 +529,7 @@ class DownloadCoordinator(
                 var bytes = offset
                 var lastBytes = bytes
                 var lastTime = System.nanoTime()
+                var checkpointTime = lastTime
                 FileOutputStream(file, offset > 0).use { output ->
                     body.byteStream().use { input ->
                         val buffer = ByteArray(32768)
@@ -479,8 +544,12 @@ class DownloadCoordinator(
                             if (now - lastTime >= 500_000_000L) {
                                 reserve(id, if (total > 0) total - bytes + total else bytes)
                                 val speed = (bytes - lastBytes) * 1_000_000_000L / (now - lastTime)
-                                mutate(id, generation) { it.copy(downloadedBytes = bytes, totalBytes = total,
-                                    bytesPerSecond = speed, etaSeconds = if (total > bytes && speed > 0) (total - bytes) / speed else null) }
+                                val eta = if (total > bytes && speed > 0) (total - bytes) / speed else null
+                                liveProgress.update { it + (id to TransferProgress(generation, bytes, total, speed, eta)) }
+                                if (now - checkpointTime >= 5_000_000_000L) {
+                                    mutate(id, generation) { it.copy(downloadedBytes = bytes, totalBytes = total, bytesPerSecond = speed, etaSeconds = eta) }
+                                    checkpointTime = now
+                                }
                                 lastBytes = bytes
                                 lastTime = now
                             }

@@ -23,7 +23,7 @@ android {
 
     defaultConfig {
         applicationId = "com.pickaudio"
-        minSdk = 36
+        minSdk = 35
         targetSdk = 36
         versionCode = pickAudioVersion.getProperty("versionCode").toInt()
         versionName = pickAudioVersion.getProperty("versionName")
@@ -127,6 +127,7 @@ android {
 // Public debug/test credentials only; release signing material is never read by this task.
 val generateUpdateFixtures = tasks.register("generateUpdateFixtures") {
     dependsOn("validateSigningDebug")
+    inputs.property("minSdk", android.defaultConfig.minSdk ?: 35)
     val output = layout.buildDirectory.dir("generated/updateFixtures")
     outputs.dir(output)
     doLast {
@@ -146,7 +147,7 @@ val generateUpdateFixtures = tasks.register("generateUpdateFixtures") {
         listOf("valid", "wrong-signer", "wrong-package").forEach { kind ->
             val manifest = directory.resolve("$kind.xml")
             val packageName = if (kind == "wrong-package") "com.pickaudio.fixture" else "com.pickaudio"
-            manifest.writeText("""<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="$packageName" android:versionCode="100000" android:versionName="99.0.0"><uses-sdk android:minSdkVersion="36" android:targetSdkVersion="36"/><application android:label="Isolated Test Fixture"/></manifest>""")
+            manifest.writeText("""<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="$packageName" android:versionCode="100000" android:versionName="99.0.0"><uses-sdk android:minSdkVersion="${android.defaultConfig.minSdk}" android:targetSdkVersion="36"/><application android:label="Isolated Test Fixture"/></manifest>""")
             val unsigned = directory.resolve("$kind-unsigned.apk")
             exec { commandLine(aapt, "link", "--manifest", manifest, "-I", platformJar, "-o", unsigned) }
             exec {

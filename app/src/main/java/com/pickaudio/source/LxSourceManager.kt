@@ -70,6 +70,7 @@ class LxSourceManager(
     private val sourceDao = database.sourceDao()
     private val gson = Gson()
     private val builtinMutex = Mutex()
+    @Volatile private var builtinsReady = false
     private val stellarWaveCode by lazy { context.assets.open(STELLARWAVE_ASSET).bufferedReader(Charsets.UTF_8).use { it.readText() } }
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, e ->
         Log.e("LxSourceManager", "Source background operation failed", e)
@@ -97,8 +98,8 @@ class LxSourceManager(
     private val engineSlots = Semaphore(4)
     private val networkSlots = Semaphore(8)
 
-    fun audioClient(base: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS).build(), network: Network? = null): OkHttpClient {
+    private val audioHttpClient by lazy { okHttpClient.newBuilder().readTimeout(30, TimeUnit.SECONDS).callTimeout(0, TimeUnit.SECONDS).build() }
+    fun audioClient(base: OkHttpClient = audioHttpClient, network: Network? = null): OkHttpClient {
         val routed = if (network == null) base else base.newBuilder().socketFactory(network.socketFactory)
             .dns(object : Dns {
                 override fun lookup(hostname: String) = network.getAllByName(hostname).toList()
@@ -129,6 +130,13 @@ class LxSourceManager(
         val id = selected?.sourceId ?: if (selected == null) defaultSourceId(platform) else return emptyList()
         val source = sourceDao.getSourceById(id) ?: return emptyList()
         return if (source.isEnabled) capabilitiesForSource(source)[platform]?.qualities.orEmpty() else emptyList()
+    }
+
+    suspend fun configurationToken(platform: String): String = withContext(Dispatchers.IO) {
+        val selection = sourceDao.getSelectionForPlatform(platform)
+        val id = selection?.sourceId ?: if (selection == null) defaultSourceId(platform) else null
+        val source = id?.let { sourceDao.getSourceById(it) }
+        listOf(id, source?.scriptHash, source?.isEnabled, source?.capabilitiesJson).joinToString("\u0000")
     }
 
     suspend fun testSource(source: SourceScriptEntity) {
@@ -385,6 +393,7 @@ class LxSourceManager(
     }
 
     suspend fun ensureBuiltinSources() = withContext(Dispatchers.IO) { builtinMutex.withLock {
+        if (builtinsReady) return@withLock
         try {
             val builtinId = "builtin_aggregate"
             val existing = sourceDao.getSourceById(builtinId)
@@ -434,9 +443,11 @@ class LxSourceManager(
                 }
                 sourceDao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity("tx", BUILTIN_QQ_ID))
             }
+            builtinsReady = true
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             Log.e("LxSourceManager", "ensureBuiltinSources error", e)
+            throw e
         }
     } }
 

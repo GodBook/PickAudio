@@ -44,7 +44,33 @@ fun SearchScreen(
     val snack = remember { SnackbarHostState() }
     var selectedIds by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
     var selecting by rememberSaveable { mutableStateOf(false) }
-    val resultsListState = rememberLazyListState()
+    val allResultsState = rememberLazyListState()
+    val qqResultsState = rememberLazyListState()
+    val netEaseResultsState = rememberLazyListState()
+    val resultsListState = when (searchStateManager.selectedPlatform) {
+        Platform.ALL -> allResultsState
+        Platform.QQ -> qqResultsState
+        else -> netEaseResultsState
+    }
+    var savedQuery by rememberSaveable { mutableStateOf(searchStateManager.query.take(500)) }
+    var savedSubmitted by rememberSaveable { mutableStateOf(searchStateManager.submittedQuery.take(500)) }
+    var savedPlatform by rememberSaveable { mutableStateOf(searchStateManager.selectedPlatform.name) }
+    var restoredSearch by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (searchStateManager.submittedQuery.isBlank() && savedSubmitted.isNotBlank()) {
+            searchStateManager.selectPlatform(runCatching { Platform.valueOf(savedPlatform) }.getOrDefault(Platform.ALL))
+            searchStateManager.submit(savedSubmitted)
+            searchStateManager.query = savedQuery
+        }
+        restoredSearch = true
+    }
+    SideEffect {
+        if (restoredSearch) {
+            savedQuery = searchStateManager.query.take(500)
+            savedSubmitted = searchStateManager.submittedQuery.take(500)
+            savedPlatform = searchStateManager.selectedPlatform.name
+        }
+    }
     androidx.activity.compose.BackHandler(enabled = selecting && !com.pickaudio.LocalPlayerOverlayVisible.current) { selecting = false; selectedIds = emptySet() }
     var playlistTracks by remember { mutableStateOf<List<Track>?>(null) }
     var downloadTracks by remember { mutableStateOf<List<Track>?>(null) }
@@ -58,7 +84,7 @@ fun SearchScreen(
         val id = onlineIds[item.platform to item.songId] ?: track.id
         return track.copy(id = id, isFavorite = id in favoriteIds, isInLibrary = id in libraryIdSet)
     }
-    val allTracks = searchStateManager.searchResults.map(::canonical)
+    val allTracks = searchStateManager.visibleResults.map(::canonical)
     val selected = allTracks.filter { it.id in selectedIds }
     fun select(id: String) { selecting = true; selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id }
     fun search(keyword: String) {
@@ -66,10 +92,16 @@ fun SearchScreen(
         selectedIds = emptySet(); selecting = false
         keyboard?.hide()
         searchStateManager.submit(keyword)
-        scope.launch { resultsListState.scrollToItem(0) }
+        scope.launch { listOf(allResultsState, qqResultsState, netEaseResultsState).forEach { it.scrollToItem(0) } }
         scope.launch { userPreferences.addSearchHistory(keyword.trim()) }
     }
     fun message(text: String) { scope.launch { snack.showSnackbar(text) } }
+    fun switchPlatform(platform: Platform) {
+        selectedIds = emptySet(); selecting = false
+        searchStateManager.selectPlatform(platform)
+        if (searchStateManager.query.isNotBlank() && searchStateManager.query.trim() != searchStateManager.submittedQuery)
+            search(searchStateManager.query)
+    }
     fun addToLibrary(tracks: List<Track>) {
         scope.launch {
             try {
@@ -92,24 +124,24 @@ fun SearchScreen(
             MusicSearchField(searchStateManager.query, { searchStateManager.query = it },
                 stringResource(com.pickaudio.R.string.ui_searchscreen_002),
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                onClear = { searchStateManager.clear() }, onSearch = { search(searchStateManager.query) })
+                onClear = { selectedIds = emptySet(); selecting = false; searchStateManager.clear() }, onSearch = { search(searchStateManager.query) })
             TabRow(selectedTabIndex = Platform.entries.indexOf(searchStateManager.selectedPlatform),
                 containerColor = MaterialTheme.colorScheme.background, modifier = Modifier.padding(horizontal = 20.dp)) {
                 Platform.entries.forEach { platform ->
                     Tab(selected = searchStateManager.selectedPlatform == platform, onClick = {
-                        searchStateManager.selectPlatform(platform)
-                        if (searchStateManager.query.isNotBlank() && searchStateManager.query.trim() != searchStateManager.submittedQuery)
-                            search(searchStateManager.query)
+                        switchPlatform(platform)
                     }, text = { Text(platform.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) })
                 }
             }
             if (selecting) {
                 SelectionActions(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
-                    TextButton(onClick = { selectedIds = allTracks.map { it.id }.toSet() }) { Text("全选 (${selectedIds.size})") }
+                    TextButton(onClick = { selectedIds = allTracks.map { it.id }.toSet() }) {
+                        Text((if (searchStateManager.selectedPlatform == Platform.ALL) "全选已显示" else "全选已加载") + " (${selectedIds.size})")
+                    }
                     TextButton(onClick = { playlistTracks = selected }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.action_add_playlist)) }
                     TextButton(onClick = { addToLibrary(selected) }, enabled = selected.isNotEmpty()) { Text("加入曲库") }
                     TextButton(onClick = { downloadTracks = selected }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.action_download)) }
-                    TextButton(onClick = { selected.forEach { playbackCoordinator.addToQueue(it) }; message("已加入队尾") }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.action_add_queue)) }
+                    TextButton(onClick = { playbackCoordinator.addTracksToQueue(selected); message("已加入队尾 · ${selected.size} 首") }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.action_add_queue)) }
                 }
             }
             LazyColumn(Modifier.weight(1f).testTag("search_results"), state = resultsListState, contentPadding = PaddingValues(bottom = 16.dp)) {
@@ -141,7 +173,7 @@ fun SearchScreen(
                             Text("${state.items.size} 首", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-                    items(if (searchStateManager.selectedPlatform == Platform.ALL) state.items.take(5) else state.items, key = { "${it.platform}_${it.songId}" }) { item ->
+                    items(searchStateManager.visiblePlatformStates.getValue(platform).items, key = { "${it.platform}_${it.songId}" }) { item ->
                         val track = canonical(item)
                         MusicTrackRow(track, isCurrent = current?.id == track.id, isPlaying = playing,
                             selecting = selecting, selected = track.id in selectedIds, onSelect = { select(track.id) },
@@ -162,7 +194,7 @@ fun SearchScreen(
                     item(key = "status_${platform}") {
                         Column(Modifier.fillMaxWidth().padding(16.dp)) {
                             if (searchStateManager.selectedPlatform == Platform.ALL && state.items.size > 5)
-                                TextButton(onClick = { searchStateManager.selectPlatform(Platform.fromId(platform)) }) {
+                                TextButton(onClick = { switchPlatform(Platform.fromId(platform)) }) {
                                     Text("查看${Platform.fromId(platform).displayName}全部 ${state.items.size} 首")
                                 }
                             if (state.loading) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("正在加载${Platform.fromId(platform).displayName}…") }

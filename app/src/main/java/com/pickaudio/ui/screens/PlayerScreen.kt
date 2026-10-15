@@ -48,7 +48,6 @@ fun PlayerScreen(
     val scope = rememberCoroutineScope()
     val track by coordinator.currentTrack.collectAsStateWithLifecycle()
     val playing by coordinator.playRequested.collectAsStateWithLifecycle()
-    val progress by coordinator.currentPositionMs.collectAsStateWithLifecycle()
     val duration by coordinator.durationMs.collectAsStateWithLifecycle()
     val state by coordinator.uiState.collectAsStateWithLifecycle()
     val candidates by coordinator.versionCandidates.collectAsStateWithLifecycle()
@@ -57,7 +56,8 @@ fun PlayerScreen(
     val queueEntries by coordinator.queueEntries.collectAsStateWithLifecycle()
     val index by coordinator.currentIndex.collectAsStateWithLifecycle()
     val sleep by coordinator.sleepTimerRemainingMs.collectAsStateWithLifecycle()
-    val lyricSize by app.userPreferences.lyricFontSize.collectAsStateWithLifecycle(initialValue = 18)
+    val savedLyricSize by app.userPreferences.lyricFontSize.collectAsStateWithLifecycle(initialValue = 18)
+    var lyricSize by remember(savedLyricSize) { mutableIntStateOf(savedLyricSize) }
     val translation by app.userPreferences.showLyricTranslation.collectAsStateWithLifecycle(initialValue = true)
     val defaultQuality by app.userPreferences.defaultOnlineQuality.collectAsStateWithLifecycle(initialValue = Quality.Q128K)
     val libraryIds by app.libraryRepository.libraryTrackIds.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -74,6 +74,7 @@ fun PlayerScreen(
     var lyricLoading by remember(track?.id) { mutableStateOf(false) }
     var lyricError by remember(track?.id) { mutableStateOf<String?>(null) }
     var retryLyrics by remember(track?.id) { mutableIntStateOf(0) }
+    var loadedLyricRevision by remember(track?.id) { mutableIntStateOf(-1) }
     var pendingLyricTrackId by remember { mutableStateOf<String?>(null) }
     val snack = remember { SnackbarHostState() }
     val lrcPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -100,10 +101,11 @@ fun PlayerScreen(
     val relinkFile = rememberRelinkFileAction(app.libraryRepository,
         { scope.launch { snack.showSnackbar("文件已关联，可点击播放") } },
         { message -> scope.launch { snack.showSnackbar(message) } })
-    LaunchedEffect(track?.id, retryLyrics) {
+    LaunchedEffect(track?.id, retryLyrics, lyricsActive) {
+        if (!lyricsActive || loadedLyricRevision == retryLyrics) return@LaunchedEffect
         val song = track ?: return@LaunchedEffect
         lyricLoading = true; lyricError = null
-        try { lyricData = app.lyricRepository.load(song, refresh = retryLyrics > 0) }
+        try { lyricData = app.lyricRepository.load(song, refresh = retryLyrics > 0); loadedLyricRevision = retryLyrics }
         catch (e: CancellationException) { throw e }
         catch (e: Exception) { lyricError = "歌词加载失败，请检查网络后重试" }
         finally { lyricLoading = false }
@@ -159,7 +161,7 @@ fun PlayerScreen(
                                 TextButton(onClick = ::importLyrics) { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_010)) }
                                 if (song.platform != null) TextButton(onClick = { retryLyrics++ }) { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_012)) }
                             }
-                            else -> SyncedLyricsView(lyricData.lines, progress, lyricData.offsetMs, coordinator::seekTo, { value ->
+                             else -> ConnectedSyncedLyricsView(lyricData.lines, coordinator, lyricData.offsetMs, coordinator::seekTo, { value ->
                                 val bounded = value.coerceIn(-60000, 60000)
                                 lyricData = lyricData.copy(offsetMs = bounded)
                                 app.lyricRepository.scheduleOffset(song.id, bounded)
@@ -207,23 +209,12 @@ fun PlayerScreen(
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(onClick = coordinator::retryCurrent) { Text(stringResource(com.pickaudio.R.string.action_retry)) }
                             TextButton(onClick = onOpenSource) { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_014)) }
+                            if (song.platform != null) TextButton(onClick = { showQuality = true }) { Text("选择音质") }
                             if (song.platform == null) TextButton(onClick = { relinkFile(song, null) }) { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_015)) }
                         }
                     }
                 }
-                var dragPosition by remember(song.id) { mutableStateOf<Float?>(null) }
-                val progressLabel = stringResource(com.pickaudio.R.string.playback_progress)
-                Slider(value = dragPosition ?: if (duration > 0) (progress.toFloat() / duration).coerceIn(0f, 1f) else 0f,
-                    onValueChange = { dragPosition = it }, onValueChangeFinished = { dragPosition?.let { coordinator.seekTo((it * duration).toLong()) }; dragPosition = null },
-                    enabled = duration > 0 && state.phase !in listOf(PlaybackPhase.RESOLVING, PlaybackPhase.ERROR),
-                    modifier = Modifier.fillMaxWidth().semantics {
-                        contentDescription = progressLabel
-                        stateDescription = "${formatMusicTime(progress)} / ${formatMusicTime(duration)}"
-                    })
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(formatMusicTime(dragPosition?.let { (it * duration).toLong() } ?: progress), style = MaterialTheme.typography.labelMedium)
-                    Text(formatMusicTime(duration), style = MaterialTheme.typography.labelMedium)
-                }
+                PlaybackProgress(coordinator, song.id, duration, state.phase)
                 Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     IconButton(onClick = { coordinator.togglePlaybackMode() }) { Icon(when (mode) { PlaybackMode.SEQUENTIAL -> Icons.Default.FormatListNumbered; PlaybackMode.LIST_LOOP -> Icons.Default.Repeat; PlaybackMode.SINGLE_LOOP -> Icons.Default.RepeatOne; PlaybackMode.SHUFFLE -> Icons.Default.Shuffle }, mode.displayName) }
                     IconButton(onClick = coordinator::previous) { Icon(Icons.Default.SkipPrevious, stringResource(com.pickaudio.R.string.action_previous), modifier = Modifier.size(32.dp)) }
@@ -237,7 +228,7 @@ fun PlayerScreen(
     }
     if (candidates.isNotEmpty()) VersionChoiceDialog(song, candidates, coordinator::confirmVersion, coordinator::dismissVersionCandidates, state.message)
     if (showQueue) QueueBottomSheet(queue, index, coordinator::playQueueItemFromUi, coordinator::removeQueueItem, onClearQueue,
-        { showQueue = false }, coordinator::moveQueueItem, coordinator::undoClearQueue, queueEntries.map { it.id })
+        { showQueue = false }, coordinator::moveQueueItem, coordinator::undoClearQueue, remember(queueEntries) { queueEntries.map { it.id } }, coordinator::reorderQueue)
     if (showTimer) SleepTimerDialog(sleep, coordinator.stopAfterCurrentTrack, coordinator::setSleepTimer, { coordinator.cancelSleepTimer(); coordinator.stopAfterCurrentTrack = true }, coordinator::cancelSleepTimer, { showTimer = false })
     if (showQuality) PlaybackQualityDialog(song, app.sourceManager, state.requestedQuality ?: defaultQuality.value,
         state.actualQuality, { showQuality = false }) { quality, saveDefault ->
@@ -250,11 +241,31 @@ fun PlayerScreen(
     if (showLyricOptions) AlertDialog(onDismissRequest = { showLyricOptions = false }, title = { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_016)) }, text = {
         Column {
             Text("字号 · $lyricSize")
-            Slider(lyricSize.toFloat(), { scope.launch { app.userPreferences.setLyricFontSize(it.toInt()) } }, valueRange = 14f..28f, steps = 13)
+            Slider(lyricSize.toFloat(), { lyricSize = it.toInt() },
+                onValueChangeFinished = { scope.launch { app.userPreferences.setLyricFontSize(lyricSize) } }, valueRange = 14f..28f, steps = 13)
             Row(verticalAlignment = Alignment.CenterVertically) { Text(stringResource(com.pickaudio.R.string.ui_playerscreen_017), Modifier.weight(1f)); Switch(translation, { scope.launch { app.userPreferences.setShowLyricTranslation(it) } }) }
         }
     }, confirmButton = { TextButton(onClick = { showLyricOptions = false }) { Text(stringResource(com.pickaudio.R.string.action_done)) } })
     playlistTracks?.let { PlaylistPickerDialog(it, app.playlistRepository, { playlistTracks = null }, { result -> scope.launch { snack.showSnackbar(result) } }) }
     downloadTracks?.let { DownloadQualityDialog(it, app.downloadCoordinator, app.sourceManager, app.userPreferences, { downloadTracks = null }, onOpenSource,
         { result -> scope.launch { snack.showSnackbar(result.summary) } }) }
+}
+
+@Composable
+private fun PlaybackProgress(coordinator: PlaybackCoordinator, trackId: String, duration: Long, phase: PlaybackPhase) {
+    val progress by coordinator.currentPositionMs.collectAsStateWithLifecycle()
+    var dragPosition by remember(trackId) { mutableStateOf<Float?>(null) }
+    val progressLabel = stringResource(com.pickaudio.R.string.playback_progress)
+    Slider(value = dragPosition ?: if (duration > 0) (progress.toFloat() / duration).coerceIn(0f, 1f) else 0f,
+        onValueChange = { dragPosition = it },
+        onValueChangeFinished = { dragPosition?.let { coordinator.seekTo((it * duration).toLong()) }; dragPosition = null },
+        enabled = duration > 0 && phase !in listOf(PlaybackPhase.RESOLVING, PlaybackPhase.ERROR),
+        modifier = Modifier.fillMaxWidth().semantics {
+            contentDescription = progressLabel
+            stateDescription = "${formatMusicTime(progress)} / ${formatMusicTime(duration)}"
+        })
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(formatMusicTime(dragPosition?.let { (it * duration).toLong() } ?: progress), style = MaterialTheme.typography.labelMedium)
+        Text(formatMusicTime(duration), style = MaterialTheme.typography.labelMedium)
+    }
 }

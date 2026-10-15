@@ -14,11 +14,13 @@ import java.nio.ByteOrder
 class OptimizationDocumentsProvider : DocumentsProvider() {
     private var songs = 0
     private var childQueries = 0
+    private var audioOpens = 0
+    private var openDelayMs = 0L
     private val directory get() = File(requireNotNull(context).cacheDir, "optimization-documents").apply { mkdirs() }
     override fun onCreate() = true
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle = when (method) {
         "seed" -> {
-            songs = extras?.getInt("songs") ?: 0; childQueries = 0
+            songs = extras?.getInt("songs") ?: 0; childQueries = 0; audioOpens = 0; openDelayMs = 0
             val size = 44 + 88200
             val audio = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN).apply {
                 put("RIFF".toByteArray()); putInt(size - 8); put("WAVEfmt ".toByteArray()); putInt(16)
@@ -29,18 +31,21 @@ class OptimizationDocumentsProvider : DocumentsProvider() {
             File(directory, "lyrics.lrc").writeText("[00:00.00]同目录歌词")
             Bundle()
         }
-        "stats" -> Bundle().apply { putInt("childQueries", childQueries) }
+        "stats" -> Bundle().apply { putInt("childQueries", childQueries); putInt("audioOpens", audioOpens) }
+        "delay" -> { openDelayMs = extras?.getLong("milliseconds") ?: 0; Bundle() }
         "clear" -> { directory.listFiles().orEmpty().filter { it.isFile }.forEach { it.delete() }; songs = 0; Bundle() }
         else -> super.call(method, arg, extras) ?: Bundle()
     }
     private val columns = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-        DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_SIZE, DocumentsContract.Document.COLUMN_FLAGS)
+        DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_SIZE, DocumentsContract.Document.COLUMN_FLAGS,
+        DocumentsContract.Document.COLUMN_LAST_MODIFIED)
     private fun row(id: String): Array<Any> {
         val dir = id == "root"
         val lyric = id.startsWith("lyric")
         val name = if (dir) "验证目录" else "song_${id.substringAfter('_')}.${if (lyric) "lrc" else "wav"}"
         return arrayOf(id, name, if (dir) DocumentsContract.Document.MIME_TYPE_DIR else if (lyric) "text/plain" else "audio/wav",
-            if (dir) 0L else File(directory, if (lyric) "lyrics.lrc" else "audio.wav").length(), 0)
+            if (dir) 0L else File(directory, if (lyric) "lyrics.lrc" else "audio.wav").length(), 0,
+            if (dir) 0L else File(directory, if (lyric) "lyrics.lrc" else "audio.wav").lastModified())
     }
     override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor {
         val fields = projection?.let { p -> Array(p.size) { p[it] } } ?: columns
@@ -62,6 +67,9 @@ class OptimizationDocumentsProvider : DocumentsProvider() {
         parentDocumentId == "root" && (documentId == "root" || documentId.startsWith("audio_") || documentId.startsWith("lyric_"))
     override fun queryRoots(projection: Array<out String>?): Cursor =
         MatrixCursor(projection?.let { p -> Array(p.size) { p[it] } } ?: arrayOf(DocumentsContract.Root.COLUMN_ROOT_ID))
-    override fun openDocument(documentId: String, mode: String, signal: android.os.CancellationSignal?): ParcelFileDescriptor =
-        ParcelFileDescriptor.open(File(directory, if (documentId.startsWith("lyric")) "lyrics.lrc" else "audio.wav"), ParcelFileDescriptor.MODE_READ_ONLY)
+    override fun openDocument(documentId: String, mode: String, signal: android.os.CancellationSignal?): ParcelFileDescriptor {
+        if (!documentId.startsWith("lyric")) audioOpens++
+        if (openDelayMs > 0) Thread.sleep(openDelayMs)
+        return ParcelFileDescriptor.open(File(directory, if (documentId.startsWith("lyric")) "lyrics.lrc" else "audio.wav"), ParcelFileDescriptor.MODE_READ_ONLY)
+    }
 }

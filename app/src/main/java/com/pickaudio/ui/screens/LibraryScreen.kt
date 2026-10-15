@@ -38,6 +38,7 @@ import com.pickaudio.ui.components.*
 import kotlinx.coroutines.launch
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.platform.testTag
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -115,7 +116,7 @@ fun LibraryScreen(
             IconButton(onClick = onNavigateToSettings) { Icon(Icons.Default.Settings, stringResource(com.pickaudio.R.string.settings_title)) }
         })
     }, snackbarHost = { SnackbarHost(snack) }, modifier = modifier.fillMaxSize()) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(padding).testTag("library_list"), contentPadding = PaddingValues(bottom = 16.dp)) {
             item(key = "library_controls") {
               Column(Modifier.fillMaxWidth()) {
             MusicSearchField(query, { query = it }, stringResource(com.pickaudio.R.string.ui_libraryscreen_002),
@@ -169,7 +170,8 @@ fun LibraryScreen(
                 Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(12.dp), modifier = Modifier.padding(horizontal = 20.dp).fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {
                         Text(importState.message ?: "${importState.label} · ${importState.processed}${importState.total?.let { " / $it" }.orEmpty()}")
-                        Text("新增 ${importState.imported} · 跳过 ${importState.skipped} · 失败 ${importState.failed}", style = MaterialTheme.typography.bodySmall)
+                        Text("新增 ${importState.imported} · 更新 ${importState.updated} · 跳过 ${importState.skipped} · 失败 ${importState.failed}", style = MaterialTheme.typography.bodySmall)
+                        if (importState.shortSkipped > 0) Text("其中 ${importState.shortSkipped} 首因时长过滤", style = MaterialTheme.typography.bodySmall)
                         if (importState.running) {
                             if (importState.total != null && importState.total!! > 0) LinearProgressIndicator(progress = { importState.processed.toFloat() / importState.total!! }, modifier = Modifier.fillMaxWidth())
                             else LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -185,7 +187,11 @@ fun LibraryScreen(
                 TextButton(onClick = { deleteTracks = selected; deleteFiles = false }, enabled = selected.isNotEmpty()) { Text(stringResource(com.pickaudio.R.string.ui_libraryscreen_011)) }
             }
             if (group != null) TextButton(onClick = { group = null }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null); Text(groups.find { it.key == group }?.label ?: "返回分类") }
-            browserState.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
+            if (browserState.loading) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("正在读取曲库…", Modifier.padding(16.dp)) }
+            browserState.error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
+                TextButton(onClick = browser::retry) { Text("重新读取曲库") }
+            }
             if (allTracks.isNotEmpty()) Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("共 ${tracks.size} 首", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (tracks.isNotEmpty()) TextButton(onClick = { playbackCoordinator.setQueueAndPlay(tracks) }) {
@@ -194,7 +200,7 @@ fun LibraryScreen(
             }
               }
             }
-                if (tracks.isEmpty()) item {
+                if (tracks.isEmpty() && !browserState.loading && browserState.error == null) item {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 48.dp), horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.size(80.dp)) {

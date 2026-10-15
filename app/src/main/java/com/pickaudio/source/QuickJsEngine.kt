@@ -5,6 +5,8 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import com.google.gson.JsonParser
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import java.util.concurrent.atomic.AtomicLong
 
 class QuickJsEngine : Closeable {
@@ -12,6 +14,7 @@ class QuickJsEngine : Closeable {
     private var rtPtr: Long = 0
     private var ctxPtr: Long = 0
     private var callbackFailure: Exception? = null
+    private val jobsRevision = MutableStateFlow(0L)
 
     init {
         rtPtr = QuickJsNativeBridge.nativeCreateRuntime()
@@ -39,12 +42,16 @@ class QuickJsEngine : Closeable {
 
     fun evaluate(script: String, filename: String = "script.js"): String? {
         return lock.withLock {
-            checkOpen()
-            val res = QuickJsNativeBridge.nativeEvaluate(ctxPtr, script, filename)
-            // Process microtasks
-            QuickJsNativeBridge.nativeExecutePendingJobs(rtPtr)
-            res
+            try { evaluateLocked(script, filename) }
+            finally { jobsRevision.value++ }
         }
+    }
+
+    private fun evaluateLocked(script: String, filename: String): String? {
+        checkOpen()
+        val res = QuickJsNativeBridge.nativeEvaluate(ctxPtr, script, filename)
+        QuickJsNativeBridge.nativeExecutePendingJobs(rtPtr)
+        return res
     }
 
     suspend fun evaluateAsync(expression: String, filename: String = "request.js"): String = withTimeout(15000) {
@@ -61,12 +68,17 @@ class QuickJsEngine : Closeable {
         try {
             while (true) {
                 currentCoroutineContext().ensureActive()
-                val result = JsonParser.parseString(evaluate("globalThis.$key", "<promise-result>") ?: error("音源解析状态为空")).asJsonObject
+                val (revision, text) = lock.withLock {
+                    jobsRevision.value to evaluateLocked("globalThis.$key", "<promise-result>")
+                }
+                val result = JsonParser.parseString(text ?: error("音源解析状态为空")).asJsonObject
                 when (result.get("state")?.asString) {
                     "fulfilled" -> return@withTimeout result.get("value")?.toString() ?: error("音源返回空地址")
                     "rejected" -> error(result.get("error")?.asString ?: "音源解析失败")
                 }
-                delay(20)
+                // Every host callback/public evaluation drains pending jobs and notifies all waiters.
+                // Capture under the engine lock so completion between inspection and await is retained.
+                jobsRevision.first { it != revision }
             }
             @Suppress("UNREACHABLE_CODE") error("音源解析超时")
         } finally { runCatching { evaluate("delete globalThis.$key", "<promise-cleanup>") } }
@@ -79,15 +91,15 @@ class QuickJsEngine : Closeable {
                     QuickJsNativeBridge.nativeResolveLxRequestCallback(ctxPtr, reqId, isErr, dataJson)
                     QuickJsNativeBridge.nativeExecutePendingJobs(rtPtr)
                 } catch (e: Exception) { callbackFailure = e }
+                finally { jobsRevision.value++ }
             }
         }
     }
 
     fun executePendingJobs(): Int {
         return lock.withLock {
-            if (rtPtr != 0L) {
-                QuickJsNativeBridge.nativeExecutePendingJobs(rtPtr)
-            } else 0
+            try { if (rtPtr != 0L) QuickJsNativeBridge.nativeExecutePendingJobs(rtPtr) else 0 }
+            finally { jobsRevision.value++ }
         }
     }
 
@@ -113,6 +125,7 @@ class QuickJsEngine : Closeable {
                 QuickJsNativeBridge.nativeDestroyRuntime(rtPtr)
                 rtPtr = 0
             }
+            jobsRevision.value++
         }
     }
 

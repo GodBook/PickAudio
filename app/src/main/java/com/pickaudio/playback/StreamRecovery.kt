@@ -16,4 +16,4 @@ internal fun isRecoverableStreamError(error: PlaybackException): Boolean = when 
     else -> false
 }
 
-internal fun isRecoverableHttpStatus(code: Int?): Boolean = code in setOf(401, 403, 408, 410, 429, 500, 502, 503, 504)
+internal fun isRecoverableHttpStatus(code: Int?): Boolean = code in setOf(401, 403, 408, 410, 412, 429, 500, 502, 503, 504)

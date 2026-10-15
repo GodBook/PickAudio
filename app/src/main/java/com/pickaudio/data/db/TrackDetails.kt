@@ -11,3 +11,5 @@ data class TrackDetails(
     @Relation(parentColumn = "id", entityColumn = "trackId") val favorites: List<FavoriteEntity>
 )
 data class PlaylistSummaryRow(val id: String, val songCount: Int, val coverUri: String?)
+data class DownloadStateCount(val status: String, val count: Int)
+data class DownloadNotificationRow(val id: String, val title: String)

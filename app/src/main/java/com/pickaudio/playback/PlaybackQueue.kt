@@ -59,10 +59,28 @@ class PlaybackQueue(private val shuffle: (List<Long>) -> List<Long> = { it.shuff
 
     fun insert(track: Track, index: Int = items.size): Int {
         val position = index.coerceIn(0, items.size)
-        items = items.toMutableList().apply { add(position, PlaybackQueueEntry(ids.incrementAndGet(), track)) }
+        insertAll(listOf(track), position)
+        return position
+    }
+
+    fun insertAll(tracks: List<Track>, index: Int = items.size) {
+        if (tracks.isEmpty()) return
+        val position = index.coerceIn(0, items.size)
+        val added = tracks.map { PlaybackQueueEntry(ids.incrementAndGet(), it) }
+        items = ArrayList<PlaybackQueueEntry>(items.size + added.size).apply {
+            addAll(items.subList(0, position)); addAll(added); addAll(items.subList(position, items.size))
+        }
         revision++
         resetShuffle()
-        return position
+    }
+
+    fun reorder(order: List<Long>, expected: List<Long>): Boolean {
+        if (items.map { it.id } != expected || order.size != items.size || order.toSet() != expected.toSet()) return false
+        if (order == expected) return true
+        val byId = items.associateBy { it.id }
+        items = order.map { byId.getValue(it) }
+        revision++
+        return true
     }
 
     fun replaceCurrent(track: Track) {

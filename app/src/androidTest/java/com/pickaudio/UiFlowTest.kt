@@ -144,14 +144,16 @@ class UiFlowTest {
         compose.onNodeWithText("加载更多网易云结果").performClick()
         compose.waitUntil(5000) { manager.platformStates["wy"]?.items?.size == 21 }
         compose.onNodeWithText("多选").performClick()
-        compose.onNodeWithText("全选 (0)").performClick()
+        compose.onNodeWithText("全选已显示 (0)").performClick()
         compose.onNodeWithText("加入歌单").performClick()
         compose.onNode(hasSetTextAction() and hasText("新建歌单名称")).performTextInput("UX 批量验证")
         compose.onNodeWithText("新建并加入").performClick()
         compose.waitUntil(5000) { runBlocking { app.playlistRepository.getAllPlaylists().first() }.any { it.name == "UX 批量验证" } }
         playlistId = runBlocking { app.playlistRepository.getAllPlaylists().first() }.first { it.name == "UX 批量验证" }.id
-        compose.waitUntil(10000) { runBlocking { app.playlistRepository.getTracksForPlaylist(playlistId!!).first().size } == 41 }
-        assertEquals(41, runBlocking { app.playlistRepository.getTracksForPlaylist(playlistId!!).first().size })
+        compose.waitUntil(10000) { runBlocking { app.playlistRepository.getTracksForPlaylist(playlistId!!).first().size } == 10 }
+        val selectedTracks = runBlocking { app.playlistRepository.getTracksForPlaylist(playlistId!!).first() }
+        assertEquals(10, selectedTracks.size)
+        assertEquals(mapOf("wy" to 5, "tx" to 5), selectedTracks.groupingBy { it.platform }.eachCount())
         runBlocking { app.database.trackDao().getAllTracks().first().filter { it.id.contains("ui_") }.forEach { app.libraryRepository.deleteTrack(it.id) } }
     }
 
