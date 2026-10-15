@@ -2,7 +2,7 @@
 
 日期：2026-10-15（Asia/Shanghai）。版本：1.5.0/code 19，Room v5；支持 Android 15/API 35 及以上，target/compile 为 36。
 
-状态：本轮功能与发布候选验收完成，准备合并发布。当前功能源码提交为 `807697f`，CI 验证提交为 `76a8b99`，后续仅补测量脚本与文档；最终发布状态以文末为准。
+状态：本轮功能验收与正式发布完成。功能源码提交为 `807697f`，CI 验证提交为 `76a8b99`，后续仅补测量脚本与文档；已核对发布标签的应用代码与已测构建一致。
 
 ## 实现与构建
 
@@ -77,4 +77,6 @@ UID、偏好文件字节、歌曲平台引用、歌单/收藏/歌词校准、重
 
 [固定提交 CI](https://github.com/GodBook/PickAudio/actions/runs/38716886463) 最终通过：构建、JVM、Lint、schema 成功，API 35/36 × Debug/validation 四组各 102/102、无跳过。API 35 validation 初轮 101/102，服务停止/重试专项一次超时；相同提交重新运行该完整组 102/102 通过（6m16.99s），其他三组报告分别为 6m39.85s、6m37.93s、6m39.34s。手机完整 validation 与该专项三次独立执行也通过，单次超时根因仍未确定；此处保留间歇性风险，不宣称应用代码已修复该次超时。
 
-[PR #6](https://github.com/GodBook/PickAudio/pull/6) 准备合并。公开 Release 与资产回下载摘要完成后更新发布状态。
+[PR #6](https://github.com/GodBook/PickAudio/pull/6) 已合入 main。标签 `v1.5.0` 指向合并提交 `28b651aa6d83891e9e355c1a32fd4714bb8aa2ae`，其应用代码与已验证构建一致。[v1.5.0 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.5.0) 已于 2026-10-15 10:38:13 UTC（18:38:13 上海时间）作为最新正式版公开，包含原签名 APK、SHA256SUMS.txt 与 version.json。
+
+通过公开 URL、不带认证回下载全部三个资产；APK 大小 8,291,613 字节、SHA-256 与本地正式包及手机已安装包一致，摘要文件和版本元数据一致。证据：`public-release-verification.json`、`downloaded-public/`。随后同步根目录 `version.json` 与 README 下载入口为 1.5.0/code 19。

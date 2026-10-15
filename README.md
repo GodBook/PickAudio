@@ -4,7 +4,7 @@ Android 本地与在线音乐播放器，使用 Kotlin、Jetpack Compose、Room�
 
 当前源码为 v1.5.0/code 19，统一搜索多选范围与换源播放状态，优化大批量队列、下载刷新、重复导入、歌词和脚本等待，增加 Android 15 支持，见 [更新说明](docs/RELEASE-1.5.0.md)。保留随机时间线有限遍历、QQ 原曲校验、候选录音确认、后台连续播放及六种主题配色。歌曲可用性仍受平台授权与音源后端影响。
 
-本版真机、裁剪包、原签名升级、CI 和性能实测见 [v1.5.0 验证记录](docs/VALIDATION-1.5.0.md)。同一 Android 15 手机的 Debug 测量中，1,000→2,000 条队列的同步主线程 API p95 从 583.96 ms 降至 20.55 ms；不包含异步落库。启动和滚动尚未证实稳定改善，不将这项收益推广为整体性能或续航提升。
+本版 87 项 JVM、USB 小米 9 SE 的 Debug/validation 各 102 项，以及 API 35/36 四组 CI 各 102 项通过；原签名覆盖升级和手机正式包检查完成，见 [v1.5.0 验证记录](docs/VALIDATION-1.5.0.md)。同一 Android 15 手机的 Debug 测量中，1,000→2,000 条队列的同步主线程 API p95 从 583.96 ms 降至 20.55 ms；不包含异步落库。Debug 启动和滚动尚未证实稳定改善，不将这项收益推广为整体性能或续航提升。
 
 v1.4.5 的 84 项 JVM 测试、本地 90 项 Debug 设备测试，以及 GitHub Debug／裁剪验证变体各 90 项 API 36 设备测试全部通过，包括 24 次真实自然随机切歌、后台控制器、暂停/恢复和返回界面。原签名覆盖升级和实际正式包的后台自然随机切歌、12 次通知切歌及界面恢复验证通过；旧版四项时间线回归失败，修复版五项专项通过。实际范围见 [验证记录](docs/VALIDATION-1.4.5.md)，尚未在用户实体机复验。
 
@@ -83,7 +83,7 @@ Debug APK：`app/build/outputs/apk/debug/app-debug.apk`。Release 构建默认�
 
 Release已开启R8与资源裁剪。构建版本统一读取version.properties；依赖锁定和SHA-256校验随本轮验收生成。第三方来源与完整许可证见[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，构建同时将准确依赖清单和原始notice放入APK，设置页可离线查看。
 
-正式安装包：[`PickAudio-v1.4.5-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.4.5/PickAudio-v1.4.5-release.apk)，沿用原项目签名，大小约 7.86 MiB，可覆盖旧正式版。更新说明和安装包校验信息见 [v1.4.5 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.4.5)，构建、设备回归与覆盖升级数据保留结果见 [验证记录](docs/VALIDATION-1.4.5.md)。
+正式安装包：[`PickAudio-v1.5.0-release.apk`](https://github.com/GodBook/PickAudio/releases/download/v1.5.0/PickAudio-v1.5.0-release.apk)，沿用原项目签名，大小约 7.91 MiB，可覆盖旧正式版。更新说明和安装包校验信息见 [v1.5.0 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.5.0)，手机测试、CI、性能及覆盖升级结果见 [验证记录](docs/VALIDATION-1.5.0.md)。公开资产已回下载核对，根目录更新元数据为 code 19。
 
 ## 仓库
 

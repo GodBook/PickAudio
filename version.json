@@ -1,10 +1,10 @@
 {
-  "versionCode": 18,
-  "versionName": "1.4.5",
-  "changelog": "1. 修复随机播放时歌曲停止、应用无响应的问题，消除播放列表遍历环路。\n2. 改善随机切歌、媒体控制器、重复歌曲条目和队列编辑的稳定性。\n3. 手动选择随机队列中的歌曲后，避免紧接着重复选中当前条目。\n4. 原签名覆盖升级验证通过，保留歌单、收藏、设置、歌词校准、队列、进度和暂停下载。\n已在 Android 16 专用模拟器验证连续随机切歌、后台播放及暂停/恢复，尚未在用户实体机复验。",
-  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.4.5/PickAudio-v1.4.5-release.apk",
-  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.4.5",
-  "apkSize": 8242461,
-  "sha256": "4cbc3eef20aeb2a7eec73e4cac12958918d806f76c9f78cb05bf5551178e4d49",
-  "publishTime": "2026-10-09"
+  "versionCode": 19,
+  "versionName": "1.5.0",
+  "changelog": "1. 搜索多选与当前显示范围一致，切换平台清空选择，换源保留播放状态和进度。\n2. 优化批量队列、拖动排序、下载文件核验与历史分页，批量命令反馈实际结果。\n3. 减少重复查询、写盘、通知、歌词加载和脚本轮询，重复导入复用未变化文件信息。\n4. 增加 Android 15 支持，保留原签名升级与数据库 v5。\n同机 Debug 测试中，批量队列操作主线程 p95 从约 584 ms 降至 21 ms；启动、滚动与续航收益仍待专项验证。",
+  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.5.0/PickAudio-v1.5.0-release.apk",
+  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.5.0",
+  "apkSize": 8291613,
+  "sha256": "fe40c85bfeeda6403f162d1be31f25b4935738846a40c4b120d1a55c7b01f281",
+  "publishTime": "2026-10-15"
 }
