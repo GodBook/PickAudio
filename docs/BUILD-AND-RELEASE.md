@@ -1,6 +1,6 @@
 # 构建、回归与发布基线
 
-应用ID为com.pickaudio，当前源码版本1.4.5/code 18。version.properties 为源码构建版本的唯一入口；根目录 version.json 描述已公开发布的APK，不随本地构建覆盖，在正式Release可下载后同步。
+应用 ID 为 `com.pickaudio`，当前源码版本 1.5.0/code 19。支持 Android 15/API 35 及以上，target/compile 为 36，数据库保持 Room v5。`version.properties` 为源码构建版本的唯一入口；根目录 `version.json` 描述已公开发布的 APK，不随本地构建覆盖，在正式 Release 可下载后同步。
 
 ## 环境和常规检查
 
@@ -20,7 +20,7 @@ Windows下让各变体生成代码完成后再单独运行Lint，避免KSP正在
 
 ## 隔离设备回归
 
-UiFlowTest及部分媒体测试会清空应用单例队列。只在无个人数据的专用API36设备运行。本地当前专用设备为emulator-5560；不得使用个人设备emulator-5554。
+UiFlowTest 及部分媒体测试会清空应用单例队列，只在无个人应用数据的专用设备或已明确授权的测试实例运行。CI 覆盖 API 35/36；本地专用 API 36 模拟器为 `emulator-5560`，不得使用个人设备 `emulator-5554`。本轮用户明确授权 USB 小米 9 SE（`1944b301`、API 35），开始时未安装拾音；测试仅使用生成的静音音频与自有夹具，不操作个人音乐。每条设备命令必须指定序列号，不能假设默认设备。
 
 Windows中文路径下UTP不能正确定位APK时，先安装test APK，再安装主APK，然后直接运行同一套instrumentation：
 
@@ -58,15 +58,17 @@ adb -s emulator-5560 shell am start -W -n com.pickaudio/.MainActivity --ez open_
 
 ## 发布检查
 
-Release默认为未签名构建。沿用原项目证书签名；本次提升至1.4.5/code 18，核验公开1.4.4/code 17的覆盖安装。先完成本地覆盖安装与数据保留验证，再检查远端CI并发布；实体蓝牙、TalkBack和实体升级记录按实际验证范围记录。
+Release 默认为未签名构建。沿用原项目证书签名；本次提升至 1.5.0/code 19，核验公开 1.4.5/code 18 的覆盖安装。先完成本地覆盖安装与数据保留验证、授权手机生产代码检查，再检查远端 CI 并发布；实体蓝牙、TalkBack、耗电和实体升级记录按实际范围记录。Android 15 手机无法安装最低 API 36 的旧正式包，因此旧版同机性能基线仅放宽 minSdk 后构建，不能称为正式包配对比较。
 
 ```powershell
-./scripts/verify-release.ps1 -ApkPath <signed-apk> -PreviousVersionCode 17 -ExpectedCertificateSha256 <original-certificate-sha256> -SdkPath D:/dev/android-sdk -ChangelogPath <release-notes> -OutputDirectory app/build/release-candidate
+./scripts/verify-release.ps1 -ApkPath <signed-apk> -PreviousVersionCode 18 -ExpectedCertificateSha256 <original-certificate-sha256> -SdkPath D:/dev/android-sdk -ChangelogPath <release-notes> -OutputDirectory app/build/release-candidate
 ```
 
 脚本核对包名、源码版本、单调版本号、正式证书、签名有效性、双ABI、ELF PT_LOAD和APK ZIP的16KiB对齐，输出实际大小、SHA-256与元数据。输出目录限定在app/build，根目录历史version.json不受影响。仅检查本地未签名包时可使用-AllowUnsigned并指定真实较低的PreviousVersionCode；结果明确为publishable=false。
 
-GitHub工作流执行单测、Lint、Debug/Release构建、schema核查以及API36 Debug/裁剪设备回归；v1.3.2的[完整远端CI](https://github.com/GodBook/PickAudio/actions/runs/37573309207)已通过，两组设备测试各59项。本地65项JVM测试与59项设备测试均无失败或跳过；原签名覆盖升级保留设置、歌单、喜欢、重复队列、播放进度及暂停下载，正式资产回下载摘要一致，见[修复与发布记录](BUGFIX-1.3.2.md)。构建许可材料与准确依赖列表打包进APK。升级依赖时成组更新锁定和校验信息，复查源授权、JNI和音频流程。
+GitHub 工作流执行单测、Lint、Debug/Release 构建、schema 核查，以及 API 35/36 × Debug/validation 四组设备回归。同分支 push/PR 使用并发取消机制，取消的旧运行不算验收通过。本版构建、手机、性能、升级及 CI 的实际结果见 [v1.5.0 验证记录](VALIDATION-1.5.0.md)；历史 v1.3.2 结果见 [修复与发布记录](BUGFIX-1.3.2.md)。构建许可材料与准确依赖列表打包进 APK。升级依赖时成组更新锁定和校验信息，复查源授权、JNI 和音频流程。
+
+启动与滚动复测使用 `scripts/measure-startup.ps1 -Serial <serial> -Dataset <description>`、`scripts/measure-scroll.ps1 -Serial <serial>`。分别记录构建、固定数据规模、设备与原始样本；`am start -W TotalTime` 只代表 Activity 显示时间。Debug、validation 和实际 Release 的数据分别记录；单次 PSS 或 USB 充电测试不能证明长期内存/续航改善。
 
 托管CI明确安装SDK36/build-tools35/NDK28.2/CMake3.22.1，避免setup-android默认请求已下线的tools包。CI=true时从Google、Maven Central和Gradle Plugin Portal解析依赖；本地环境继续使用既有镜像配置。依赖锁定与摘要校验保持开启。
 
