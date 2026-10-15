@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.catch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -36,7 +37,10 @@ fun PlaylistDetailScreen(
     val app = LocalContext.current.applicationContext as PickAudioApplication
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
-    val loadedTracks by remember(playlistId) { playlistRepository.getTracksForPlaylist(playlistId).map<List<Track>, List<Track>?> { it } }
+    var loadRetry by remember(playlistId) { mutableIntStateOf(0) }
+    var loadError by remember(playlistId, loadRetry) { mutableStateOf<String?>(null) }
+    val loadedTracks by remember(playlistId, loadRetry) { playlistRepository.getTracksForPlaylist(playlistId)
+        .map<List<Track>, List<Track>?> { it }.catch { loadError = "歌单暂时无法读取，请重试"; emit(emptyList()) } }
         .collectAsStateWithLifecycle(initialValue = null)
     val storedTracks = loadedTracks.orEmpty()
     val playlists by playlistRepository.getAllPlaylists().collectAsStateWithLifecycle(initialValue = emptyList())
@@ -100,7 +104,8 @@ fun PlaylistDetailScreen(
             }
             LazyColumn(Modifier.weight(1f), state = listState, contentPadding = PaddingValues(bottom = 16.dp)) {
                 if (loadedTracks == null) item { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("正在读取歌单…", Modifier.padding(24.dp)) }
-                if (tracks.isEmpty() && loadedTracks != null) item {
+                loadError?.let { error -> item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)); TextButton(onClick = { loadRetry++ }) { Text("重新读取歌单") } } }
+                if (tracks.isEmpty() && loadedTracks != null && loadError == null) item {
                     Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(if (query.isBlank()) "歌单暂无歌曲" else "没有匹配歌曲")
                         Text(stringResource(com.pickaudio.R.string.ui_playlistdetailscreen_003), style = MaterialTheme.typography.bodyMedium)

@@ -25,6 +25,7 @@ import com.pickaudio.download.DownloadCommand
 import com.pickaudio.ui.components.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.catch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -33,11 +34,17 @@ fun DownloadScreen(downloadCoordinator: DownloadCoordinator, onBack: () -> Unit,
     val app = context.applicationContext as PickAudioApplication
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var pageLimit by remember(tab) { mutableIntStateOf(100) }
-    val loadedTasks by remember(tab, pageLimit) {
-        downloadCoordinator.getTasksForTab(tab, pageLimit).map<List<DownloadTaskEntity>, Triple<Int, Int, List<DownloadTaskEntity>>?> { Triple(tab, pageLimit, it) }
+    var loadRetry by remember { mutableIntStateOf(0) }
+    var loadError by remember(tab, pageLimit, loadRetry) { mutableStateOf<String?>(null) }
+    val loadedTasks by remember(tab, pageLimit, loadRetry) {
+        val requestedTab = tab
+        val requestedLimit = pageLimit
+        downloadCoordinator.getTasksForTab(requestedTab, requestedLimit)
+            .map<List<DownloadTaskEntity>, Triple<Int, Int, List<DownloadTaskEntity>>?> { Triple(requestedTab, requestedLimit, it) }
+            .catch { loadError = "下载记录暂时无法读取，请重试"; emit(Triple(requestedTab, requestedLimit, emptyList())) }
     }.collectAsStateWithLifecycle(initialValue = null)
     val page = loadedTasks?.takeIf { it.first == tab && it.second == pageLimit }
-    val counts by downloadCoordinator.taskCounts.collectAsStateWithLifecycle(initialValue = emptyMap())
+    val counts by remember(loadRetry) { downloadCoordinator.taskCounts.catch { emit(emptyMap()) } }.collectAsStateWithLifecycle(initialValue = emptyMap())
     val libraryIds by app.libraryRepository.libraryTrackIds.collectAsStateWithLifecycle(initialValue = emptyList())
     val wifiOnly by app.userPreferences.wifiOnlyDownload.collectAsStateWithLifecycle(initialValue = true)
     val candidates by downloadCoordinator.versionCandidates.collectAsStateWithLifecycle()
@@ -63,6 +70,7 @@ fun DownloadScreen(downloadCoordinator: DownloadCoordinator, onBack: () -> Unit,
             try {
                 val result = downloadCoordinator.controlBatch(ids, command)
                 selectedIds = emptySet()
+                commandBusy = false
                 snack.showSnackbar(result.summary)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) { snack.showSnackbar(e.message ?: "操作失败，请重试") }
@@ -93,6 +101,10 @@ fun DownloadScreen(downloadCoordinator: DownloadCoordinator, onBack: () -> Unit,
             if (commandBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (page == null) item { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("正在读取下载记录…", Modifier.padding(16.dp)) }
+                else if (loadError != null) item {
+                    Text(loadError!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
+                    TextButton(onClick = { loadRetry++ }) { Text("重新读取下载记录") }
+                }
                 else if (shown.isEmpty()) item { Text(when(tab) { 0 -> "没有待下载任务"; 1 -> "下载完成的音乐会显示在这里"; else -> "暂时没有需要处理的下载" }, modifier = Modifier.padding(16.dp)) }
                 items(shown, key = { it.id }) { task ->
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {

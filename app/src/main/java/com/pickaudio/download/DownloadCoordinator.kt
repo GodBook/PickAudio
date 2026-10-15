@@ -405,7 +405,13 @@ class DownloadCoordinator(
                     DownloadCommand.RESUME -> resumeAndSchedule(id, scheduleNow = false)
                     DownloadCommand.CANCEL -> cancelAndWait(id)
                 }
-                changed++
+                val after = downloadDao.getTaskById(id)
+                val applied = when (command) {
+                    DownloadCommand.PAUSE -> after?.status == "PAUSED"
+                    DownloadCommand.RESUME -> after?.status == "PENDING" || after?.status in ACTIVE_STATES
+                    DownloadCommand.CANCEL -> after == null || after.status == "CANCELLED"
+                }
+                if (applied) changed++ else skipped++
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { failures += e.message ?: "任务处理失败" }
         }

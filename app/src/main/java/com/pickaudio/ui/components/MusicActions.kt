@@ -158,15 +158,16 @@ fun DownloadQualityDialog(
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         }
     }, confirmButton = { Button(enabled = !busy && selected != null && online.isNotEmpty(), onClick = {
+        val quality = selected ?: return@Button
         busy = true
         scope.launch {
             try {
-                val result = coordinator.enqueueBatch(report?.failures?.map { it.track } ?: tracks, selected!!)
+                val result = coordinator.enqueueBatch(report?.failures?.map { it.track } ?: tracks, quality)
                 val combined = report?.let { previous -> result.copy(added = previous.added + result.added,
                     resumed = previous.resumed + result.resumed, existing = previous.existing + result.existing,
                     skipped = previous.skipped + result.skipped) } ?: result
                 report = combined
-                if (rememberChoice) preferences.setDefaultDownloadQuality(Quality.fromValue(selected!!))
+                if (rememberChoice) preferences.setDefaultDownloadQuality(Quality.fromValue(quality))
                 onQueued(combined)
                 if (result.failures.isEmpty()) onDismiss()
             } catch (e: CancellationException) { throw e }
