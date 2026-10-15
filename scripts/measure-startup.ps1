@@ -8,7 +8,8 @@ $ErrorActionPreference = 'Stop'
 if ($Serial -notmatch '^[A-Za-z0-9._:-]+$') { throw 'An explicit adb device serial is required.' }
 if ($ColdSamples -lt 1 -or $WarmSamples -lt 1) { throw 'Sample counts must be positive.' }
 $package = 'com.pickaudio'
-function Invoke-Adb([string[]]$Arguments) {
+function Invoke-Adb {
+    param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
     $result = & adb -s $Serial @Arguments
     if ($LASTEXITCODE -ne 0) { throw 'The explicit-device adb command failed.' }
     $result
