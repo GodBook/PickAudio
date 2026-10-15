@@ -44,7 +44,8 @@ class UpdateUiFlowTest {
             compose.onNodeWithText("多选").performClick()
             compose.onNodeWithText("全选已加载 (0)").performClick()
             compose.onNodeWithText("全选已加载 (20)").assertIsDisplayed()
-            compose.onNodeWithText("加入队列").performClick()
+            compose.onNodeWithText("加入队列").performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
+            compose.waitUntil(5000) { app.playbackCoordinator.queueEntries.value.size == 20 }
             compose.runOnIdle {
                 assertEquals(20, app.playbackCoordinator.queueEntries.value.size)
                 assertTrue(app.playbackCoordinator.queue.value.all { it.platform == "tx" })

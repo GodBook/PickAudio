@@ -18,7 +18,7 @@ if (!(Invoke-Adb @('shell','pm','path',$package))) { throw 'PickAudio is not ins
 function Launch-Sample {
     $result = Invoke-Adb @('shell','am','start','-W','-n',"$package/.MainActivity")
     $match = [regex]::Match(($result -join "`n"), '(?m)^TotalTime:\s*(\d+)')
-    if (!$match.Success) { throw 'Activity TotalTime was not reported.' }
+    if (!$match.Success) { throw ('Activity TotalTime was not reported: ' + ($result -join ' ')) }
     [int]$match.Groups[1].Value
 }
 function Summary([int[]]$Samples) {

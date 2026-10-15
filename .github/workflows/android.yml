@@ -6,6 +6,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: android-verification-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-latest
