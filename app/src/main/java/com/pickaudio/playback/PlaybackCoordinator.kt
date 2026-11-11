@@ -58,7 +58,8 @@ class PlaybackCoordinator(
     private val context: Context,
     private val database: PickAudioDatabase,
     private val sourceManager: LxSourceManager,
-    val userPreferences: UserPreferences = UserPreferences(context)
+    val userPreferences: UserPreferences = UserPreferences(context),
+    private val onIncompleteDownload: (suspend (trackId: String, assetId: Long) -> Unit)? = null
 ) {
     private val playbackDao = database.playbackDao()
     private val queueDao = database.queueDao()
@@ -981,12 +982,14 @@ class PlaybackCoordinator(
                 catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
                     localAssetDao.updateAvailability(asset.id, false, "下载音频不完整或无法读取，请重新下载")
+                    requestIncompleteDownloadRepair(track.id, asset.id)
                     continue
                 } else null
             if (inspected != null) {
                 val failure = AudioCompleteness.failure(expectedDuration, inspected.durationMs)
                 if (failure != null) {
                     localAssetDao.updateAvailability(asset.id, false, "下载文件不完整，请重新下载：$failure")
+                    requestIncompleteDownloadRepair(track.id, asset.id)
                     continue
                 }
             }
@@ -1027,6 +1030,16 @@ class PlaybackCoordinator(
 
         // Fallback to track localUri if present
         throw IllegalStateException("音频文件已移动或访问权限失效，请重新关联文件")
+    }
+
+    private fun requestIncompleteDownloadRepair(trackId: String, assetId: Long) {
+        val repair = onIncompleteDownload ?: return
+        // Repair has its own lifetime; online playback must continue while it is queued.
+        scope.launch(Dispatchers.IO) {
+            try { repair(trackId, assetId) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { Log.w("PlaybackCoordinator", "无法安排不完整下载修复", e) }
+        }
     }
 
     private fun isAccessible(uri: Uri): Boolean = runCatching {

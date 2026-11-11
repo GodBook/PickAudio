@@ -40,7 +40,8 @@ class DownloadCoordinator(
     private val client: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS).build(),
     private val scheduleOverride: (suspend () -> Unit)? = null,
-    private val publicationCheckpoint: (suspend (String) -> Unit)? = null
+    private val publicationCheckpoint: (suspend (String) -> Unit)? = null,
+    private val repairCheckpoint: (suspend (stage: String, taskId: String) -> Unit)? = null
 ) {
     private val downloadDao = database.downloadDao()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
@@ -49,6 +50,8 @@ class DownloadCoordinator(
     private val commands = Mutex()
     private val runnerMutex = Mutex()
     private val recoveryMutex = Mutex()
+    private val repairMutex = Mutex()
+    private val integrityChecks by lazy { DownloadIntegrityChecks(context) }
     private data class Worker(val generation: Long, val job: Job)
     private val workers = mutableMapOf<String, Worker>()
     private val blockedTracks = mutableMapOf<String, Int>()
@@ -325,6 +328,106 @@ class DownloadCoordinator(
             currentCoroutineContext().ensureActive()
             reconcileCompleted(it)
         }
+    }
+
+    suspend fun repairIncompleteDownloads(limit: Int = Int.MAX_VALUE, scheduleNow: Boolean = true,
+        forceScan: Boolean = false): DownloadRepairReport = withContext(Dispatchers.IO) {
+        val report = repairMutex.withLock {
+            recoverInterrupted()
+            var checked = 0
+            var requeued = 0
+            var skipped = 0
+            val errors = mutableListOf<DownloadRepairFailure>()
+            val capabilities = mutableMapOf<String, List<String>>()
+            for (snapshot in downloadDao.getCompletedTasks(limit.coerceAtLeast(0))) {
+                currentCoroutineContext().ensureActive()
+                try {
+                    val value = snapshot.targetUri
+                    val asset = value?.let { database.localAssetDao().getAssetByUri(it) }
+                    val expected = expectedDuration(snapshot)
+                    if (value == null || asset == null || asset.sourceType != "DOWNLOADED" || asset.trackId != snapshot.trackId || expected <= 0) {
+                        skipped++
+                        continue
+                    }
+                    val uri = Uri.parse(value)
+                    if (ownedMedia(uri)?.pending != false) { skipped++; continue }
+                    val fingerprint = integrityChecks.fingerprint(snapshot, expected)
+                    if (!forceScan && asset.isAvailable && integrityChecks.wasChecked(snapshot.id, fingerprint)) {
+                        skipped++
+                        continue
+                    }
+                    checked++
+                    var actualDuration: Long? = null
+                    val failure = try {
+                        val audio = AndroidAudioProbe.inspect(context, uri, validatePackets = true)
+                        actualDuration = audio.durationMs
+                        AudioCompleteness.failure(expected, audio.durationMs)
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) {
+                        val reason = e.message.orEmpty()
+                        // Decoder/provider failures can be temporary. Only explicit packet or
+                        // duration evidence authorizes replacing a previously published file.
+                        if (reason !in setOf("WAV 文件内容被截断", "音频末尾不完整，请重新下载",
+                                "音频文件没有完整数据帧", "音频数据帧无效", "文件没有有效音频时长")) throw e
+                        reason
+                    }
+                    repairCheckpoint?.invoke("INSPECTED", snapshot.id)
+                    val after = integrityChecks.fingerprint(snapshot, expected)
+                    if (fingerprint != null && fingerprint != after) { skipped++; continue }
+                    if (failure == null) {
+                        if (fingerprint != null && after == fingerprint) integrityChecks.passed(snapshot.id, fingerprint)
+                        continue
+                    }
+                    val supported = capabilities[snapshot.platform] ?: sourceManager.supportedQualities(snapshot.platform)
+                        .also { capabilities[snapshot.platform] = it }
+                    val canDownload = snapshot.targetQuality in supported
+                    val changed = commands.withLock { database.withTransaction {
+                        val current = downloadDao.getTaskById(snapshot.id) ?: return@withTransaction false
+                        if (current.status != "COMPLETED" || current.targetUri != snapshot.targetUri ||
+                            current.executionGeneration != snapshot.executionGeneration || current.trackId in blockedTracks)
+                            return@withTransaction false
+                        val currentAsset = database.localAssetDao().getAssetByUri(value) ?: return@withTransaction false
+                        if (currentAsset.id != asset.id || currentAsset.sourceType != "DOWNLOADED" ||
+                            currentAsset.trackId != current.trackId || ownedMedia(uri)?.pending != false) return@withTransaction false
+                        val currentExpected = expectedDuration(current)
+                        if (currentExpected <= 0 || actualDuration?.let { AudioCompleteness.failure(currentExpected, it) == null } == true)
+                            return@withTransaction false
+                        database.localAssetDao().updateAvailability(asset.id, false, "下载文件不完整，已保留旧文件：$failure")
+                        val status = if (canDownload) "PENDING" else "FAILED"
+                        val message = if (canDownload) "检测到下载音频不完整，正在重新下载"
+                            else "下载音频不完整，当前音源不支持原下载音质 ${current.targetQuality}，请换源后重试"
+                        val replacement = DownloadLease.invalidate(current, status, message).copy(targetUri = null,
+                            publishToken = null, publishStage = null, resourceEtag = null, tempFilePath = null,
+                            downloadedBytes = 0, totalBytes = 0, actualQuality = null, durationMs = currentExpected)
+                        downloadDao.insertOrUpdate(replacement)
+                        if (canDownload) pendingGenerations[current.id] = replacement.executionGeneration
+                        true
+                    } }
+                    if (!changed) { skipped++; continue }
+                    integrityChecks.forget(snapshot.id)
+                    if (canDownload) {
+                        requeued++
+                        repairCheckpoint?.invoke("REQUEUED", snapshot.id)
+                    } else {
+                        errors.add(DownloadRepairFailure(snapshot.id, snapshot.title, "当前音源不支持原下载音质 ${snapshot.targetQuality}，请换源后重试"))
+                    }
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    skipped++
+                    errors.add(DownloadRepairFailure(snapshot.id, snapshot.title, e.message ?: "暂时无法检查下载文件"))
+                }
+            }
+            integrityChecks.retain(downloadDao.getAllTasksSync().map { it.id }.toSet())
+            DownloadRepairReport(checked, requeued, skipped, errors)
+        }
+        if (scheduleNow) schedulePendingRepairs()
+        report
+    }
+
+    suspend fun schedulePendingRepairs(): Boolean {
+        if (downloadDao.getPendingTasks().isEmpty()) return false
+        if (scheduleOverride == null && !context.getSystemService(JobScheduler::class.java).canRunUserInitiatedJobs()) return false
+        return schedule(force = true)
     }
     private suspend fun reconcileCompleted(task: DownloadTaskEntity) {
         val access = task.targetUri?.let { com.pickaudio.data.repository.checkAssetAccess(context, Uri.parse(it)) }

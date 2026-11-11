@@ -7,6 +7,7 @@ import com.pickaudio.data.preferences.UserPreferences
 import com.pickaudio.data.repository.LibraryRepository
 import com.pickaudio.data.repository.PlaylistRepository
 import com.pickaudio.download.DownloadCoordinator
+import com.pickaudio.download.DownloadRepairMonitor
 import com.pickaudio.playback.PlaybackCoordinator
 import com.pickaudio.source.LxSourceManager
 import kotlinx.coroutines.*
@@ -17,8 +18,17 @@ class PickAudioApplication : Application() {
     val database: PickAudioDatabase by lazy { PickAudioDatabase.getInstance(this) }
     val userPreferences: UserPreferences by lazy { UserPreferences(this) }
     val sourceManager: LxSourceManager by lazy { LxSourceManager(this, database) }
-    val playbackCoordinator: PlaybackCoordinator by lazy { PlaybackCoordinator(this, database, sourceManager) }
+    val playbackCoordinator: PlaybackCoordinator by lazy {
+        PlaybackCoordinator(this, database, sourceManager, onIncompleteDownload = { _, _ ->
+            downloadRepairMonitor.request()
+        })
+    }
     val downloadCoordinator: DownloadCoordinator by lazy { DownloadCoordinator(this, database, sourceManager) }
+    val downloadRepairMonitor: DownloadRepairMonitor by lazy {
+        DownloadRepairMonitor(applicationScope,
+            scan = { force -> downloadCoordinator.repairIncompleteDownloads(scheduleNow = false, forceScan = force) },
+            schedulePending = { downloadCoordinator.schedulePendingRepairs() })
+    }
     val libraryRepository: LibraryRepository by lazy {
         LibraryRepository(this, database,
             stopRelatedTasks = { id ->

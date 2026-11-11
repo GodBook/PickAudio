@@ -24,6 +24,7 @@ import com.pickaudio.network.NetworkPolicy
 import com.pickaudio.playback.AudioCacheManager
 import com.pickaudio.playback.PlaybackCoordinator
 import com.pickaudio.source.LxSourceManager
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -42,6 +43,7 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Uses an isolated database/source and real Media3 decoding on a disposable test device. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -81,6 +83,32 @@ class QqPlaybackCompletenessTest {
             assertFalse(fixture.coordinator.playRequested.value)
             assertFalse(fixture.coordinator.isPlaying.value)
             assertEquals(0, fixture.coordinator.currentIndex.value)
+        }
+    }
+
+    @Test fun anIncompleteDownloadRequestsRepairWithoutBlockingOnlinePlayback() = runBlocking {
+        val requested = CompletableDeferred<Pair<String, Long>>()
+        val finishRepair = CompletableDeferred<Unit>()
+        withFixture(onIncompleteDownload = { trackId, assetId ->
+            requested.complete(trackId to assetId)
+            finishRepair.await()
+        }) { fixture ->
+            try {
+                val old = fixture.file(wave(10))
+                val track = fixture.track(old, "DOWNLOADED", storedDurationMs = 10_000)
+                val asset = fixture.database.localAssetDao().getAssetByUri(Uri.fromFile(old).toString())!!
+                fixture.prepare(track)
+                awaitPausedReady(fixture.coordinator)
+                assertEquals(track.id to asset.id, withTimeout(5000) { requested.await() })
+                assertFalse(fixture.database.localAssetDao().getAssetByUri(asset.uri)!!.isAvailable)
+                withContext(Dispatchers.Main) {
+                    assertEquals("http", fixture.coordinator.player.currentMediaItem!!.localConfiguration!!.uri.scheme)
+                    fixture.coordinator.player.play()
+                }
+                await { fixture.coordinator.currentPositionMs.value > 100 }
+                assertFalse("Playback must not wait for the repair job to complete", finishRepair.isCompleted)
+                assertTrue(old.isFile)
+            } finally { finishRepair.complete(Unit) }
         }
     }
 
@@ -162,7 +190,8 @@ class QqPlaybackCompletenessTest {
     }
 
     @Test fun completeDownloadsAndUserImportsRemainPlayable() = runBlocking {
-        withFixture { fixture ->
+        val repairs = AtomicInteger()
+        withFixture(onIncompleteDownload = { _, _ -> repairs.incrementAndGet(); Unit }) { fixture ->
             val complete = fixture.file(wave(60))
             val download = fixture.track(complete, "DOWNLOADED")
             fixture.prepare(download)
@@ -188,6 +217,7 @@ class QqPlaybackCompletenessTest {
             await { fixture.coordinator.currentPositionMs.value > 100 }
             assertTrue(fixture.database.localAssetDao().getAssetByUri(Uri.fromFile(clip).toString())!!.isAvailable)
             assertNotEquals(PlaybackPhase.ERROR, fixture.coordinator.uiState.value.phase)
+            assertEquals("Complete downloads and imported clips must not request automatic repair", 0, repairs.get())
         }
     }
 
@@ -227,7 +257,8 @@ class QqPlaybackCompletenessTest {
         }
     }
 
-    private suspend fun withFixture(path: String = "/full.wav", block: suspend (Fixture) -> Unit) {
+    private suspend fun withFixture(path: String = "/full.wav",
+        onIncompleteDownload: (suspend (String, Long) -> Unit)? = null, block: suspend (Fixture) -> Unit) {
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         val database = Room.inMemoryDatabaseBuilder(context, PickAudioDatabase::class.java).build()
         val preferences = UserPreferences(context)
@@ -260,7 +291,9 @@ class QqPlaybackCompletenessTest {
                         lx.send(lx.EVENT_NAMES.inited, {status:true,sources:{tx:{name:'QQ完整性回归',actions:['musicUrl'],qualitys:['128k']}}});
                     """.trimIndent())
                     manager.selectSourceForPlatform("tx", source.id)
-                    val coordinator = withContext(Dispatchers.Main) { PlaybackCoordinator(context, database, manager, preferences) }
+                    val coordinator = withContext(Dispatchers.Main) {
+                        PlaybackCoordinator(context, database, manager, preferences, onIncompleteDownload)
+                    }
                     val fixture = Fixture(database, coordinator, rejectNetwork)
                     try {
                         await { coordinator.restored.value }

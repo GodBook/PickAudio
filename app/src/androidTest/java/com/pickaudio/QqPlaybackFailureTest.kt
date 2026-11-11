@@ -3,6 +3,7 @@ package com.pickaudio
 import android.app.ActivityManager
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
@@ -43,8 +44,34 @@ class QqPlaybackFailureTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
     private val app get() = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as PickAudioApplication
 
-    private suspend fun await(condition: () -> Boolean) = withTimeout(20_000) {
-        while (!withContext(Dispatchers.Main) { condition() }) delay(50)
+    private suspend fun await(label: String, condition: () -> Boolean) {
+        Log.i("QqPlaybackFailureTest", "Awaiting $label")
+        try {
+            withTimeout(20_000) {
+                while (!withContext(Dispatchers.Main) { condition() }) delay(50)
+            }
+            Log.i("QqPlaybackFailureTest", "Completed $label")
+        } catch (e: TimeoutCancellationException) {
+            currentCoroutineContext().ensureActive()
+            val state = withContext(Dispatchers.Main) { diagnosticState() }
+            Log.e("QqPlaybackFailureTest", "Timed out awaiting $label: $state", e)
+            throw AssertionError("Timed out after 20000 ms awaiting $label: $state", e)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun diagnosticState(): String {
+        val coordinator = app.playbackCoordinator
+        val services = app.getSystemService(ActivityManager::class.java).getRunningServices(100)
+            .filter { it.service.className == PlaybackService::class.java.name }
+            .joinToString { "started=${it.started},foreground=${it.foreground},clients=${it.clientCount}," +
+                "pid=${it.pid},activeSince=${it.activeSince},restarting=${it.restarting}" }
+        // Avoid coordinator.player: its getter would create a player after service destruction.
+        return "ui=${coordinator.uiState.value},playRequested=${coordinator.playRequested.value}," +
+            "playing=${coordinator.isPlaying.value},position=${coordinator.currentPositionMs.value}," +
+            "duration=${coordinator.durationMs.value},index=${coordinator.currentIndex.value}," +
+            "track=${coordinator.currentTrack.value?.id},activity=${compose.activityRule.scenario.state}," +
+            "services=[$services]"
     }
 
     @Suppress("DEPRECATION")
@@ -64,15 +91,15 @@ class QqPlaybackFailureTest {
                     coordinator.setPlaybackMode(com.pickaudio.data.model.PlaybackMode.SEQUENTIAL)
                     coordinator.setQueueAndPlay(listOf(local, failed, local))
                 }
-                await { coordinator.isPlaying.value }
+                await("automatic failure: initial local playback") { coordinator.isPlaying.value }
                 compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
                 withContext(Dispatchers.Main) { coordinator.seekTo(89_700) }
-                await { coordinator.currentIndex.value == 1 && coordinator.uiState.value.message == "当前歌曲暂不可用，正在播放下一首" }
+                await("automatic failure: failed QQ skip is pending") { coordinator.currentIndex.value == 1 && coordinator.uiState.value.message == "当前歌曲暂不可用，正在播放下一首" }
                 assertTrue("Failed automatic track must retain playback intent", coordinator.playRequested.value)
                 assertTrue("Failure gap must not demote the foreground service", serviceIsForeground())
-                await { coordinator.currentIndex.value == 2 && coordinator.isPlaying.value }
+                await("automatic failure: following local track plays") { coordinator.currentIndex.value == 2 && coordinator.isPlaying.value }
                 withContext(Dispatchers.Main) { coordinator.playQueueItem(0, 89_700) }
-                await { coordinator.currentIndex.value == 1 && coordinator.uiState.value.message == "当前歌曲暂不可用，正在播放下一首" }
+                await("automatic failure: second QQ skip is pending") { coordinator.currentIndex.value == 1 && coordinator.uiState.value.message == "当前歌曲暂不可用，正在播放下一首" }
                 withContext(Dispatchers.Main) { coordinator.pause() }
                 delay(2000)
                 assertEquals(1, coordinator.currentIndex.value)
@@ -114,7 +141,7 @@ class QqPlaybackFailureTest {
             app.sourceManager.selectSourceForPlatform("tx", source.id)
             app.userPreferences.setDefaultOnlineQuality(Quality.Q128K)
             withContext(Dispatchers.Main) { coordinator.setQueueAndPlay(listOf(qq)) }
-            await { coordinator.uiState.value.phase == PlaybackPhase.ERROR }
+            await("fixture: initial QQ ${if (pending) "resolution timeout" else "source rejection"} reaches ERROR") { coordinator.uiState.value.phase == PlaybackPhase.ERROR }
             block(coordinator, local)
         } finally {
             withContext(Dispatchers.Main) { coordinator.clearQueue() }
@@ -145,7 +172,7 @@ class QqPlaybackFailureTest {
                 compose.onNodeWithContentDescription(it).assertIsDisplayed()
             }
             withContext(Dispatchers.Main) { coordinator.setQueueAndPlay(listOf(local)) }
-            await { coordinator.isPlaying.value && coordinator.currentPositionMs.value > 0 }
+            await("visible controls: local playback advances") { coordinator.isPlaying.value && coordinator.currentPositionMs.value > 0 }
         }
     }
 
@@ -153,17 +180,20 @@ class QqPlaybackFailureTest {
         withFailureFixture { coordinator, local ->
             val message = coordinator.uiState.value.message
             assertFalse(coordinator.playRequested.value)
-            withContext(Dispatchers.Main) { app.stopService(Intent(app, PlaybackService::class.java)) }
-            await { !serviceIsRunning() }
+            withContext(Dispatchers.Main) {
+                val stopped = app.stopService(Intent(app, PlaybackService::class.java))
+                Log.i("QqPlaybackFailureTest", "stopService returned $stopped: ${diagnosticState()}")
+            }
+            await("service shutdown: service disappears after stopService") { !serviceIsRunning() }
             assertEquals(PlaybackPhase.ERROR, coordinator.uiState.value.phase)
             assertEquals(message, coordinator.uiState.value.message)
             withContext(Dispatchers.Main) { coordinator.retryCurrent() }
-            await { coordinator.uiState.value.phase == PlaybackPhase.ERROR && serviceIsRunning() }
+            await("service shutdown: retry reaches ERROR with a running service") { coordinator.uiState.value.phase == PlaybackPhase.ERROR && serviceIsRunning() }
             delay(11_000) // Survive Android 16's complete foreground service start deadline.
             assertEquals(PlaybackPhase.ERROR, coordinator.uiState.value.phase)
             assertFalse(coordinator.playRequested.value)
             withContext(Dispatchers.Main) { coordinator.setQueueAndPlay(listOf(local)) }
-            await { coordinator.isPlaying.value && coordinator.currentPositionMs.value > 0 }
+            await("service shutdown: local playback advances after retry") { coordinator.isPlaying.value && coordinator.currentPositionMs.value > 0 }
         }
     }
 
@@ -172,7 +202,7 @@ class QqPlaybackFailureTest {
             assertTrue(coordinator.uiState.value.message.orEmpty().contains("15 秒"))
             assertFalse(coordinator.playRequested.value)
             withContext(Dispatchers.Main) { coordinator.setQueueAndPlay(listOf(local)) }
-            await { coordinator.isPlaying.value && coordinator.currentPositionMs.value > 0 }
+            await("source timeout: following local playback advances") { coordinator.isPlaying.value && coordinator.currentPositionMs.value > 0 }
         }
     }
 }
