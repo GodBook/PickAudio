@@ -77,7 +77,7 @@ class OptimizationLibraryTest {
         assertFalse(LibraryRepository(context, db).getTrack(id)!!.isAvailable)
     }
     @Test fun directoryEnumerationIsOneQueryAndSiblingLyricsUseTheSameIndex() = runBlocking {
-        val authority = "com.pickaudio.test.optimization.documents"
+        val authority = "${context.packageName}.test.optimization.documents"
         val base = Uri.parse("content://$authority")
         try {
             context.contentResolver.call(base, "seed", null, Bundle().apply { putInt("songs", 100) })

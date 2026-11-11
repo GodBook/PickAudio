@@ -65,7 +65,7 @@ class UpdateOptimizationTest {
 
     @Test fun completedFileChecksLeaveMainThreadResponsive() = runBlocking<Unit> {
         val db = database()
-        val authority = "com.pickaudio.test.optimization.documents"
+        val authority = "${context.packageName}.test.optimization.documents"
         val provider = Uri.parse("content://$authority")
         context.contentResolver.call(provider, "seed", null, Bundle().apply { putInt("songs", 1) })
         val uri = DocumentsContract.buildDocumentUri(authority, "audio_0")
@@ -94,7 +94,7 @@ class UpdateOptimizationTest {
 
     @Test fun repeatedFolderImportDoesNotReopenUnchangedAudio() = runBlocking<Unit> {
         val db = database()
-        val provider = Uri.parse("content://com.pickaudio.test.optimization.documents")
+        val provider = Uri.parse("content://${context.packageName}.test.optimization.documents")
         val tree = DocumentsContract.buildTreeDocumentUri(provider.authority!!, "root")
         context.contentResolver.call(provider, "seed", null, Bundle().apply { putInt("songs", 10) })
         try {

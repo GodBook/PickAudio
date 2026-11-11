@@ -1,5 +1,6 @@
 package com.pickaudio.playback
 
+import android.content.Context
 import com.pickaudio.network.withResponse
 import com.pickaudio.source.LxSourceManager
 import kotlinx.coroutines.CancellationException
@@ -17,15 +18,20 @@ private val probes = object : LinkedHashMap<String, CachedProbe>(128, 0.75f, tru
 internal fun invalidateAudioCacheProbes() = synchronized(probes) { probes.clear() }
 
 internal suspend fun resolveAudioCacheKey(client: OkHttpClient, resource: LxSourceManager.MusicResource,
-    platform: String, songId: String, quality: String): String {
+    platform: String, songId: String, quality: String, context: Context? = null): String {
+    suspend fun validatedKey(url: String, etag: String?): String {
+        val baseKey = audioCacheKey(url, platform, songId, quality, resource.sourceIdentity, etag)
+        val key = if (platform == "tx") AudioCacheManager.withQqRevision(
+            requireNotNull(context) { "QQ cache resolution requires an application context" }, baseKey) else baseKey
+        AudioCacheManager.registerValidator(key, etag)
+        return key
+    }
     var url = resource.url
     var etag: String? = null
     val probeId = listOf(resource.url, resource.sourceIdentity, platform, songId, quality).joinToString("\u0000")
     val cached = synchronized(probes) { probes[probeId]?.takeIf { it.expiresAt > android.os.SystemClock.elapsedRealtime() } }
     if (cached != null) {
-        val key = audioCacheKey(cached.url, platform, songId, quality, resource.sourceIdentity, cached.etag)
-        AudioCacheManager.registerValidator(key, cached.etag)
-        return key
+        return validatedKey(cached.url, cached.etag)
     }
     var reusable = false
     try {
@@ -45,7 +51,5 @@ internal suspend fun resolveAudioCacheKey(client: OkHttpClient, resource: LxSour
     if (reusable) synchronized(probes) {
         probes[probeId] = CachedProbe(url, etag, android.os.SystemClock.elapsedRealtime() + 30_000)
     }
-    val key = audioCacheKey(url, platform, songId, quality, resource.sourceIdentity, etag)
-    AudioCacheManager.registerValidator(key, etag)
-    return key
+    return validatedKey(url, etag)
 }
