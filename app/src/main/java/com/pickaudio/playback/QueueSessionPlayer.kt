@@ -20,7 +20,8 @@ internal fun PlaybackQueueEntry.toMediaItem(): MediaItem = MediaItem.Builder()
 
 /** Standard session commands address the same queue occurrences as the application. */
 @OptIn(UnstableApi::class)
-class QueueSessionPlayer(private val coordinator: PlaybackCoordinator) : ForwardingPlayer(coordinator.player) {
+class QueueSessionPlayer(private val coordinator: PlaybackCoordinator,
+    private val onRelease: () -> Unit = { coordinator.onServiceDestroyed() }) : ForwardingPlayer(coordinator.player) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val listeners = IdentityHashMap<Player.Listener, Player.Listener>()
     private data class State(val entries: List<PlaybackQueueEntry>, val index: Int,
@@ -192,7 +193,7 @@ class QueueSessionPlayer(private val coordinator: PlaybackCoordinator) : Forward
     }
     override fun isCurrentMediaItemSeekable() = duration > 0
     override fun isCurrentWindowSeekable() = isCurrentMediaItemSeekable
-    override fun release() { close(); coordinator.onServiceDestroyed() }
+    override fun release() { close(); onRelease() }
 
     fun close() {
         scope.cancel()

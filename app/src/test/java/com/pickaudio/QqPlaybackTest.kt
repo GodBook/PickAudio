@@ -44,6 +44,34 @@ class QqPlaybackTest {
         ).forEach { assertTrue(runCatching { adapter.parseUrl(it, "song") }.isFailure) }
     }
 
+    @Test fun explicitTrialMetadataCannotTurnANormalLookingUrlIntoACompleteSong() {
+        val adapter = QqMusicPlaybackAdapter(OkHttpClient())
+        for (trial in listOf("""{"start":0,"end":30}""", "{}", "true")) {
+            val result = runCatching { adapter.parseUrl(response(
+                """{"songmid":"song","purl":"M500media.mp3?vkey=fixture","freeTrialInfo":$trial}"""), "song") }
+            assertTrue("A non-empty normal filename must not bypass the trial marker", result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("试听片段"))
+        }
+        for (trial in listOf("null", "false")) {
+            assertTrue(adapter.parseUrl(response(
+                """{"songmid":"song","purl":"M500media.mp3","freeTrialInfo":$trial}"""), "song")
+                .endsWith("/M500media.mp3"))
+        }
+    }
+
+    @Test fun trialFilenamesAreCheckedAfterUrlResolutionWithoutInspectingQueryValues() {
+        val adapter = QqMusicPlaybackAdapter(OkHttpClient())
+        for (path in listOf("RS02media.mp3?vkey=fixture", "/preview/rs01media.mp3", "preview/%52S02media.mp3")) {
+            val result = runCatching { adapter.parseUrl(response(
+                """{"songmid":"song","purl":"$path"}"""), "song") }
+            assertTrue("RS0 filename must not bypass preview rejection: $path", result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("试听片段"))
+        }
+        assertTrue(adapter.parseUrl(response(
+            """{"songmid":"song","purl":"M800media.mp3?vkey=RS02fixture"}"""), "song")
+            .endsWith("/M800media.mp3?vkey=RS02fixture"))
+    }
+
     @Test fun lxFieldsPreserveNumericIdAndMediaIdFromBothQqResponseFormats() {
         listOf(
             """{"songid":123,"songmid":"song","strMediaMid":"media","albumname":"专辑","albummid":"album","size128":1048576}""",

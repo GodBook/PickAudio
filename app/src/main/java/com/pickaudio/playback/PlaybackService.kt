@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class PlaybackService : MediaSessionService() {
+    private val instanceToken = Any()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var mediaSession: MediaSession? = null
     private var sessionPlayer: QueueSessionPlayer? = null
@@ -44,7 +45,10 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         val app = application as PickAudioApplication
-        val player = QueueSessionPlayer(app.playbackCoordinator).also { sessionPlayer = it }
+        app.playbackCoordinator.onPlaybackServiceCreated(instanceToken)
+        // The service's token-bearing onDestroy owns coordinator cleanup. Releasing an old
+        // MediaSession wrapper must never tear down a newer playback request.
+        val player = QueueSessionPlayer(app.playbackCoordinator, onRelease = {}).also { sessionPlayer = it }
 
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL_ID, getString(R.string.playback_channel), NotificationManager.IMPORTANCE_LOW))
@@ -58,7 +62,7 @@ class PlaybackService : MediaSessionService() {
         setListener(object : MediaSessionService.Listener {
             override fun onForegroundServiceStartNotAllowedException() {
                 app.playbackCoordinator.onPlaybackServiceStartFailed(
-                    ForegroundServiceStartNotAllowedException("Media notification could not enter foreground"))
+                    ForegroundServiceStartNotAllowedException("Media notification could not enter foreground"), instanceToken)
             }
         })
         serviceScope.launch {
@@ -94,13 +98,13 @@ class PlaybackService : MediaSessionService() {
         val coordinator = (application as PickAudioApplication).playbackCoordinator
         try {
             enterForegroundForStart()
-            if (intent?.action == ACTION_START_PLAYBACK) coordinator.onPlaybackServiceReady()
+            if (intent?.action == ACTION_START_PLAYBACK) coordinator.onPlaybackServiceReady(instanceToken)
         } catch (e: ForegroundServiceStartNotAllowedException) {
-            coordinator.onPlaybackServiceStartFailed(e)
+            coordinator.onPlaybackServiceStartFailed(e, instanceToken)
             stopSelfResult(startId)
             return START_NOT_STICKY
         } catch (e: SecurityException) {
-            coordinator.onPlaybackServiceStartFailed(e)
+            coordinator.onPlaybackServiceStartFailed(e, instanceToken)
             stopSelfResult(startId)
             return START_NOT_STICKY
         }
@@ -145,7 +149,7 @@ class PlaybackService : MediaSessionService() {
         }
         sessionPlayer?.close()
         sessionPlayer = null
-        (application as PickAudioApplication).playbackCoordinator.onServiceDestroyed()
+        (application as PickAudioApplication).playbackCoordinator.onServiceDestroyed(instanceToken)
         super.onDestroy()
     }
     companion object {

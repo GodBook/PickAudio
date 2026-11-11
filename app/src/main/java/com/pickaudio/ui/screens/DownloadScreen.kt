@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -47,6 +48,7 @@ fun DownloadScreen(downloadCoordinator: DownloadCoordinator, onBack: () -> Unit,
     val counts by remember(loadRetry) { downloadCoordinator.taskCounts.catch { emit(emptyMap()) } }.collectAsStateWithLifecycle(initialValue = emptyMap())
     val libraryIds by app.libraryRepository.libraryTrackIds.collectAsStateWithLifecycle(initialValue = emptyList())
     val wifiOnly by app.userPreferences.wifiOnlyDownload.collectAsStateWithLifecycle(initialValue = true)
+    val repair by app.downloadRepairMonitor.state.collectAsStateWithLifecycle()
     val candidates by downloadCoordinator.versionCandidates.collectAsStateWithLifecycle()
     var selecting by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -81,11 +83,24 @@ fun DownloadScreen(downloadCoordinator: DownloadCoordinator, onBack: () -> Unit,
         task.coverUri, localUri = task.targetUri, platform = task.platform, platformSongId = task.platformSongId, sourceType = if (task.status == "COMPLETED") "DOWNLOADED" else "")
     Scaffold(topBar = {
         TopAppBar(title = { Text(stringResource(com.pickaudio.R.string.ui_libraryscreen_019)) }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(com.pickaudio.R.string.action_back)) } },
-            actions = { TextButton(onClick = { selecting = !selecting; selectedIds = emptySet() }) { Text(if (selecting) "完成" else "多选") } })
+            actions = {
+                IconButton(onClick = { app.downloadRepairMonitor.request(force = true) }, enabled = !repair.checking) {
+                    Icon(Icons.Default.Refresh, contentDescription = "检查下载完整性")
+                }
+                TextButton(onClick = { selecting = !selecting; selectedIds = emptySet() }) { Text(if (selecting) "完成" else "多选") }
+            })
     }, snackbarHost = { SnackbarHost(snack) }, modifier = modifier.fillMaxSize()) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             Text(if (wifiOnly) "仅在 Wi-Fi 下载 · 文件保存在 Music/PickAudio" else "允许移动网络下载 · 文件保存在 Music/PickAudio",
                 style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(16.dp))
+            if (repair.checking) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text("正在自动检查已下载歌曲的完整性…", style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            } else repair.message?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            }
             TabRow(tab) {
                 listOf("进行中", "已完成", "需处理").forEachIndexed { index, label ->
                     Tab(tab == index, onClick = { tab = index; selectedIds = emptySet() }, text = { Text("$label (${sizes[index]})") })

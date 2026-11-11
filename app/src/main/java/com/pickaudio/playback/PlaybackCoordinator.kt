@@ -9,10 +9,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.ForwardingAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.room.withTransaction
 import com.google.gson.Gson
@@ -30,6 +35,7 @@ import com.pickaudio.data.model.SearchSongItem
 import com.pickaudio.data.model.toTrack
 import com.pickaudio.data.preferences.UserPreferences
 import com.pickaudio.online.AlternativeVersionException
+import com.pickaudio.online.AudioCompleteness
 import com.pickaudio.source.LxSourceManager
 import com.pickaudio.data.repository.toTrack
 import com.pickaudio.data.repository.rankAssets
@@ -44,6 +50,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.channels.Channel
+import java.nio.ByteBuffer
 import java.util.*
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -51,7 +58,8 @@ class PlaybackCoordinator(
     private val context: Context,
     private val database: PickAudioDatabase,
     private val sourceManager: LxSourceManager,
-    val userPreferences: UserPreferences = UserPreferences(context)
+    val userPreferences: UserPreferences = UserPreferences(context),
+    private val onIncompleteDownload: (suspend (trackId: String, assetId: Long) -> Unit)? = null
 ) {
     private val playbackDao = database.playbackDao()
     private val queueDao = database.queueDao()
@@ -67,7 +75,10 @@ class PlaybackCoordinator(
 
     private var requestJob: Job? = null
     private var serviceStart: CompletableDeferred<Unit>? = null
+    private var playbackServiceInstance: Any? = null
+    private var playbackServiceRequestGeneration = -1L
     private var requestGeneration = 0L
+    @Volatile private var mediaGeneration = 0L
     private var restoringJob: Job? = null
     private val _restored = MutableStateFlow(false)
     val restored = _restored.asStateFlow()
@@ -93,6 +104,11 @@ class PlaybackCoordinator(
     private var resolvedAudioInfo: AudioInfo? = null
     private var resolvedAssetId: Long? = null
     private var resolvedCacheKey: String? = null
+    private var cacheInvalidation: Deferred<Unit>? = null
+    private var resolvedExpectedDurationMs = 0L
+    private var requestedStartPositionMs = 0L
+    private data class RenderedAudioEnd(val generation: Long, val positionMs: Long, val noSamples: Boolean)
+    @Volatile private var renderedAudioEnd: RenderedAudioEnd? = null
     val player: ExoPlayer get() = playerInstance ?: createPlayer().also { playerInstance = it }
     private fun createPlayer(): ExoPlayer {
         val dataSourceFactory = AudioCacheManager.createDataSourceFactory(context, sourceManager.audioClient())
@@ -107,7 +123,76 @@ class PlaybackCoordinator(
             .setBackBuffer(15_000, true)
             .build()
 
-        return ExoPlayer.Builder(context)
+        val renderersFactory = object : DefaultRenderersFactory(context) {
+            override fun buildAudioSink(context: Context, enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean): AudioSink? {
+                val sink = super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams) ?: return null
+                return object : ForwardingAudioSink(sink) {
+                    private var sampleRate = 0
+                    private var frameSize = 0
+                    private var streamOffsetUs = 0L
+                    private var lastSampleEndUs = 0L
+                    private var bufferGeneration = -1L
+                    private var endReported = false
+                    @Volatile private var epoch = 0L
+
+                    private fun resetObservation() {
+                        epoch++
+                        renderedAudioEnd = null
+                        lastSampleEndUs = 0L
+                        bufferGeneration = -1L
+                        endReported = false
+                    }
+
+                    override fun configure(inputFormat: Format, specifiedBufferSize: Int, outputChannels: IntArray?) {
+                        sampleRate = inputFormat.sampleRate
+                        frameSize = if (inputFormat.sampleMimeType == "audio/raw" && inputFormat.channelCount > 0)
+                            runCatching { Util.getPcmFrameSize(inputFormat.pcmEncoding, inputFormat.channelCount) }
+                                .getOrDefault(0).coerceAtLeast(0) else 0
+                        super.configure(inputFormat, specifiedBufferSize, outputChannels)
+                    }
+
+                    override fun setOutputStreamOffsetUs(outputStreamOffsetUs: Long) {
+                        if (streamOffsetUs != outputStreamOffsetUs) resetObservation()
+                        streamOffsetUs = outputStreamOffsetUs
+                        super.setOutputStreamOffsetUs(outputStreamOffsetUs)
+                    }
+
+                    override fun handleBuffer(buffer: ByteBuffer, presentationTimeUs: Long, encodedAccessUnitCount: Int): Boolean {
+                        if (frameSize > 0 && sampleRate > 0 && buffer.hasRemaining()) {
+                            if (bufferGeneration < 0) bufferGeneration = mediaGeneration
+                            val durationUs = (buffer.remaining().toLong() / frameSize) * 1_000_000 / sampleRate
+                            lastSampleEndUs = maxOf(lastSampleEndUs, presentationTimeUs - streamOffsetUs + durationUs)
+                        }
+                        return super.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+                    }
+
+                    override fun playToEndOfStream() {
+                        super.playToEndOfStream()
+                        if (endReported || frameSize <= 0 || sampleRate <= 0) return
+                        endReported = true
+                        val observedEpoch = epoch
+                        val generation = bufferGeneration.takeIf { it >= 0 } ?: mediaGeneration
+                        val noSamples = lastSampleEndUs <= 0
+                        val actualEndMs = (lastSampleEndUs / 1000).coerceAtLeast(1)
+                        // Publish before STATE_ENDED can trigger a seek/repeat and clear the sink.
+                        renderedAudioEnd = RenderedAudioEnd(generation, actualEndMs, noSamples)
+                        scope.launch(Dispatchers.Main) {
+                            // Seeking explicitly to the end can produce EOS without another sample.
+                            val soughtToEnd = noSamples && resolvedExpectedDurationMs > 0 &&
+                                requestedStartPositionMs >= resolvedExpectedDurationMs
+                            if (observedEpoch == epoch && generation == mediaGeneration &&
+                                !soughtToEnd && _uiState.value.phase !in listOf(PlaybackPhase.RESOLVING, PlaybackPhase.ERROR))
+                                rejectIncompleteStream(actualEndMs)
+                        }
+                    }
+
+                    override fun flush() { resetObservation(); super.flush() }
+                    override fun reset() { resetObservation(); sampleRate = 0; frameSize = 0; super.reset() }
+                }
+            }
+        }
+        return ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(mediaSourceFactory)
             .setLoadControl(loadControl)
             .build().apply {
@@ -120,7 +205,7 @@ class PlaybackCoordinator(
                 )
                 setHandleAudioBecomingNoisy(true)
                 setWakeMode(C.WAKE_MODE_NETWORK)
-                repeatMode = if (_playbackMode.value == PlaybackMode.SINGLE_LOOP && !stopAfterCurrentTrack) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+                repeatMode = currentRepeatMode()
                 addListener(playerListener)
                 addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
                     override fun onAudioPositionAdvancing(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
@@ -159,7 +244,7 @@ class PlaybackCoordinator(
         get() = stopAfterState
         set(value) {
             stopAfterState = value
-            playerInstance?.repeatMode = if (!value && _playbackMode.value == PlaybackMode.SINGLE_LOOP) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+            playerInstance?.repeatMode = currentRepeatMode()
         }
 
     // Shuffle history and round tracking
@@ -226,6 +311,7 @@ class PlaybackCoordinator(
             if (state == Player.STATE_BUFFERING) PlaybackDiagnostics.buffering()
             if (state == Player.STATE_READY) {
                 PlaybackDiagnostics.bufferEnded()
+                if (rejectIncompleteStream(player.duration)) return
                 _durationMs.value = player.duration.coerceAtLeast(0L)
                 val format = player.audioFormat
                 val mime = format?.sampleMimeType.orEmpty()
@@ -250,6 +336,11 @@ class PlaybackCoordinator(
             } else if (state == Player.STATE_BUFFERING && _uiState.value.phase != PlaybackPhase.RESOLVING) {
                 _uiState.value = _uiState.value.copy(phase = PlaybackPhase.BUFFERING)
             } else if (state == Player.STATE_ENDED) {
+                // Some containers retain a full-length header even when the samples end early.
+                // An early EOF must not be treated as successful completion of the recording.
+                val samples = renderedAudioEnd?.takeIf { it.generation == mediaGeneration }
+                    ?.takeUnless { it.noSamples && requestedStartPositionMs >= resolvedExpectedDurationMs }
+                if (rejectIncompleteStream(samples?.positionMs ?: player.currentPosition.coerceAtLeast(1))) return
                 handleTrackEnded()
             }
         }
@@ -259,6 +350,25 @@ class PlaybackCoordinator(
             if (_uiState.value.phase == PlaybackPhase.RESOLVING) return
             handlePlaybackFailure(error)
         }
+    }
+
+    private fun rejectIncompleteStream(actualDurationMs: Long): Boolean {
+        if (resolvedExpectedDurationMs <= 0 ||
+            playerInstance?.currentMediaItem?.localConfiguration?.uri?.scheme !in listOf("http", "https")) return false
+        val failure = AudioCompleteness.failure(resolvedExpectedDurationMs, actualDurationMs) ?: return false
+        PlaybackDiagnostics.failed("IncompleteAudio")
+        invalidateAudioCacheProbes()
+        stallMonitorJob?.cancel()
+        _isPlaying.value = false
+        _durationMs.value = resolvedExpectedDurationMs
+        failCurrentTrack(failure)
+        playerInstance?.stop()
+        resolvedCacheKey?.let { key ->
+            cacheInvalidation = scope.async(Dispatchers.IO) {
+                AudioCacheManager.invalidateIncompleteAudioCache(context, key)
+            }
+        }
+        return true
     }
 
     private fun handlePlaybackFailure(error: androidx.media3.common.PlaybackException) {
@@ -351,12 +461,18 @@ class PlaybackCoordinator(
     fun setPlaybackMode(mode: PlaybackMode) {
         if (_playbackMode.value == mode) return
         _playbackMode.value = mode
-        playerInstance?.repeatMode = if (mode == PlaybackMode.SINGLE_LOOP && !stopAfterCurrentTrack) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        playerInstance?.repeatMode = currentRepeatMode()
         if (mode == PlaybackMode.SHUFFLE) {
             queueModel.resetShuffle(clearHistory = true)
         }
         saveSnapshot()
     }
+
+    private fun currentRepeatMode(): Int =
+        // Native repeat can hide renderer EOS behind a container's overstated duration.
+        // Validated remote QQ tracks repeat through handleTrackEnded after sample validation.
+        if (_playbackMode.value == PlaybackMode.SINGLE_LOOP && !stopAfterCurrentTrack && resolvedExpectedDurationMs <= 0)
+            Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
 
     fun togglePlaybackMode(): PlaybackMode {
         val next = when (_playbackMode.value) {
@@ -431,6 +547,7 @@ class PlaybackCoordinator(
             requestJob?.cancel()
             recoveryJob?.cancel()
             requestGeneration++
+            mediaGeneration++
             _playRequested.value = false
             player.stop()
             _currentTrack.value = null
@@ -456,6 +573,7 @@ class PlaybackCoordinator(
         skipJob?.cancel()
         restoringJob?.cancel()
         requestGeneration++
+        mediaGeneration++
         _playRequested.value = false
         player.stop()
         queueModel.clear()
@@ -622,6 +740,7 @@ class PlaybackCoordinator(
 
     fun seekTo(positionMs: Long) {
         PlaybackDiagnostics.seeking()
+        requestedStartPositionMs = positionMs
         player.seekTo(positionMs)
         _currentPositionMs.value = positionMs
         saveSnapshot()
@@ -630,10 +749,7 @@ class PlaybackCoordinator(
     private suspend fun ensurePlaybackService() {
         val ready = serviceStart?.takeUnless { it.isCompleted } ?: CompletableDeferred<Unit>().also {
             serviceStart = it
-            try {
-                androidx.core.content.ContextCompat.startForegroundService(context,
-                    android.content.Intent(context, PlaybackService::class.java).setAction(PlaybackService.ACTION_START_PLAYBACK))
-            } catch (e: Exception) { it.completeExceptionally(e) }
+            startPlaybackService(it)
         }
         try {
             // Android 15+ rejects background audio focus requests until a foreground service exists.
@@ -647,9 +763,27 @@ class PlaybackCoordinator(
         }
     }
 
+    private fun startPlaybackService(ready: CompletableDeferred<Unit>) {
+        try {
+            androidx.core.content.ContextCompat.startForegroundService(context,
+                android.content.Intent(context, PlaybackService::class.java).setAction(PlaybackService.ACTION_START_PLAYBACK))
+        } catch (e: Exception) { ready.completeExceptionally(e) }
+    }
+
+    internal fun onPlaybackServiceCreated(instance: Any) {
+        playbackServiceInstance = instance
+        playbackServiceRequestGeneration = requestGeneration
+    }
+
     internal fun onPlaybackServiceReady() { serviceStart?.complete(Unit) }
 
-    internal fun onPlaybackServiceStartFailed(error: Exception) {
+    internal fun onPlaybackServiceReady(instance: Any) {
+        if (playbackServiceInstance !== instance) return
+        serviceStart?.complete(Unit)
+    }
+
+    internal fun onPlaybackServiceStartFailed(error: Exception, instance: Any? = null) {
+        if (instance != null && playbackServiceInstance !== instance) return
         Log.w("PlaybackCoordinator", "无法启动后台播放服务", error)
         serviceStart?.completeExceptionally(error)
         requestJob?.cancel()
@@ -710,6 +844,20 @@ class PlaybackCoordinator(
 
         val q = _queue.value
         if (q.isEmpty()) { return }
+        if (_playbackMode.value == PlaybackMode.SINGLE_LOOP && resolvedExpectedDurationMs > 0 &&
+            player.currentMediaItem?.localConfiguration?.uri?.scheme in listOf("http", "https")) {
+            // Completeness was checked against the renderer's EOS above. Keep the current URL
+            // and cached recording usable when the source API is offline at the loop boundary.
+            requestedStartPositionMs = 0L
+            _currentPositionMs.value = 0L
+            player.seekTo(0L)
+            player.prepare()
+            player.playWhenReady = _playRequested.value
+            _uiState.value = _uiState.value.copy(phase = PlaybackPhase.BUFFERING)
+            startStallMonitor(requestGeneration)
+            saveSnapshot()
+            return
+        }
         val next = queueModel.next(_playbackMode.value, naturalEnd = true)
         if (next == null) pause() else {
             publishQueue()
@@ -728,12 +876,16 @@ class PlaybackCoordinator(
         automaticTrack = automatic
         if (!automatic) { consecutiveFailures = 0 }
         val generation = ++requestGeneration
+        mediaGeneration++
+        renderedAudioEnd = null
         _currentTrack.value = track
         _currentPositionMs.value = startPosition
+        requestedStartPositionMs = startPosition
         _durationMs.value = track.durationMs
         _versionCandidates.value = emptyList()
         resolvedAudioInfo = null; resolvedAssetId = null
         resolvedCacheKey = null
+        resolvedExpectedDurationMs = 0L
         PlaybackDiagnostics.begin()
         _uiState.value = PlaybackUiState(PlaybackPhase.RESOLVING, requestedQuality = requestedQuality)
         _playRequested.value = autoPlay
@@ -742,6 +894,13 @@ class PlaybackCoordinator(
             try {
                 // Player creation and reset can fail too (audio service/decoder/cache failures).
                 // Keep them inside the same error boundary as resolution and preparation.
+                val pendingInvalidation = cacheInvalidation
+                try { pendingInvalidation?.await() }
+                finally {
+                    // Cancellation of this request must not release an unfinished cache writer.
+                    if (cacheInvalidation === pendingInvalidation && pendingInvalidation?.isCompleted == true)
+                        cacheInvalidation = null
+                }
                 player.stop()
                 player.playWhenReady = false
                 var stageStart = SystemClock.elapsedRealtime()
@@ -771,7 +930,8 @@ class PlaybackCoordinator(
                     .build()
 
                 // A controller can request play during a paused preparation.
-                if (_playRequested.value && !autoPlay) ensurePlaybackService()
+                if (_playRequested.value && (!autoPlay || playbackServiceInstance == null)) ensurePlaybackService()
+                player.repeatMode = currentRepeatMode()
                 player.setMediaItem(mediaItem)
                 player.prepare()
                 player.seekTo(_currentPositionMs.value)
@@ -818,13 +978,39 @@ class PlaybackCoordinator(
     }
 
     private suspend fun resolveTrackMediaUri(track: Track, generation: Long, requestedQuality: String?): Uri = withContext(Dispatchers.IO) {
+        val ref = database.onlineRefDao().getByTrackId(track.id)
+        val platform = ref?.platform ?: track.platform
+            ?: if (track.id.startsWith("online_wy_")) "wy" else if (track.id.startsWith("online_tx_")) "tx" else null
+        val songId = ref?.platformSongId ?: track.platformSongId
+            ?: track.id.removePrefix("online_wy_").removePrefix("online_tx_")
+        // Old downloads may have overwritten the track's duration with a preview's duration.
+        // The catalog metadata still identifies the expected length of the original recording.
+        val metadata = ref?.platformMetadataJson?.takeUnless { it.isBlank() || it == "{}" } ?: track.platformMetadataJson
+        val expectedDuration = if (platform == "tx")
+            AudioCompleteness.expectedDurationMs(platform, metadata, track.durationMs) else 0L
         // 1. Check local asset
         val assets = localAssetDao.getAssetsForTrack(track.id)
         for (asset in rankAssets(assets, requestedQuality)) {
             val uri = Uri.parse(asset.uri)
             val access = checkAssetAccess(context, uri)
             if (!access.available) { localAssetDao.updateAvailability(asset.id, false, access.reason); continue }
-            val info = AudioInfo.decode(asset.audioInfoJson) ?: try { AndroidAudioProbe.inspect(context, uri).info }
+            val checkDownloadedQq = platform == "tx" && asset.sourceType == "DOWNLOADED" && expectedDuration > 0
+            val inspected = if (checkDownloadedQq) try { AndroidAudioProbe.inspect(context, uri, validatePackets = true) }
+                catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    localAssetDao.updateAvailability(asset.id, false, "下载音频不完整或无法读取，请重新下载")
+                    requestIncompleteDownloadRepair(track.id, asset.id)
+                    continue
+                } else null
+            if (inspected != null) {
+                val failure = AudioCompleteness.failure(expectedDuration, inspected.durationMs)
+                if (failure != null) {
+                    localAssetDao.updateAvailability(asset.id, false, "下载文件不完整，请重新下载：$failure")
+                    requestIncompleteDownloadRepair(track.id, asset.id)
+                    continue
+                }
+            }
+            val info = inspected?.info ?: AudioInfo.decode(asset.audioInfoJson) ?: try { AndroidAudioProbe.inspect(context, uri).info }
                 catch (e: CancellationException) { throw e }
                 catch (e: Exception) { localAssetDao.updateAvailability(asset.id, false, "音频信息无法读取"); continue }
             if (info.qualityFailure(requestedQuality) != null) continue
@@ -836,13 +1022,6 @@ class PlaybackCoordinator(
         }
 
         // 2. Check online ref and resolve
-        val platform = track.platform
-            ?: database.onlineRefDao().getByTrackId(track.id)?.platform
-            ?: if (track.id.startsWith("online_wy_")) "wy" else if (track.id.startsWith("online_tx_")) "tx" else null
-        val songId = track.platformSongId
-            ?: database.onlineRefDao().getByTrackId(track.id)?.platformSongId
-            ?: track.id.removePrefix("online_wy_").removePrefix("online_tx_")
-
         if (platform != null && songId.isNotBlank()) {
             try {
                 val quality = requestedQuality ?: userPreferences.defaultOnlineQuality.first().value
@@ -853,15 +1032,31 @@ class PlaybackCoordinator(
                 val resource = sourceManager.resolveMusicResource(platform, songId, quality, track.title, track.artist)
                 PlaybackDiagnostics.stage("resolve", SystemClock.elapsedRealtime() - stageStart)
                 stageStart = SystemClock.elapsedRealtime()
-                val key = resolveAudioCacheKey(sourceManager.audioClient(), resource, platform, songId, quality)
+                val key = resolveAudioCacheKey(sourceManager.audioClient(), resource, platform, songId, quality, context)
                 PlaybackDiagnostics.stage("cacheValidation", SystemClock.elapsedRealtime() - stageStart)
-                withContext(Dispatchers.Main) { if (generation == requestGeneration) resolvedCacheKey = key }
+                withContext(Dispatchers.Main) {
+                    if (generation == requestGeneration) {
+                        resolvedCacheKey = key
+                        resolvedExpectedDurationMs = expectedDuration
+                        playerInstance?.repeatMode = currentRepeatMode()
+                    }
+                }
                 return@withContext Uri.parse(resource.url)
             } catch (e: Exception) { throw e }
         }
 
         // Fallback to track localUri if present
         throw IllegalStateException("音频文件已移动或访问权限失效，请重新关联文件")
+    }
+
+    private fun requestIncompleteDownloadRepair(trackId: String, assetId: Long) {
+        val repair = onIncompleteDownload ?: return
+        // Repair has its own lifetime; online playback must continue while it is queued.
+        scope.launch(Dispatchers.IO) {
+            try { repair(trackId, assetId) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { Log.w("PlaybackCoordinator", "无法安排不完整下载修复", e) }
+        }
     }
 
     private fun isAccessible(uri: Uri): Boolean = runCatching {
@@ -996,7 +1191,10 @@ class PlaybackCoordinator(
                 _playRequested.value = false
                 _uiState.value = PlaybackUiState(PlaybackPhase.PAUSED)
                 queueModel.current?.let { entry ->
-                    entry.track.localUri?.let { uri ->
+                    // Revalidate QQ downloads on resume; older versions could publish previews.
+                    // Imported files keep their normal paused preparation and local semantics.
+                    val downloadedQq = entry.track.platform == "tx" && entry.track.sourceType == "DOWNLOADED"
+                    entry.track.localUri?.takeUnless { downloadedQq }?.let { uri ->
                         player.setMediaItem(entry.toMediaItem().buildUpon().setUri(uri).build())
                         player.prepare()
                         player.seekTo(_currentPositionMs.value)
@@ -1009,6 +1207,26 @@ class PlaybackCoordinator(
     }
 
     fun onServiceDestroyed() {
+        playbackServiceInstance = null
+        releasePlaybackState()
+    }
+
+    internal fun onServiceDestroyed(instance: Any) {
+        // stopService can disappear from the platform's service list before onDestroy runs.
+        // A queued callback from that instance must not tear down a replacement or retry.
+        if (playbackServiceInstance !== instance) return
+        playbackServiceInstance = null
+        val newRequest = _playRequested.value && _uiState.value.phase == PlaybackPhase.RESOLVING &&
+            (serviceStart?.isCompleted == false || requestGeneration != playbackServiceRequestGeneration)
+        if (newRequest) {
+            val ready = serviceStart?.takeUnless { it.isCompleted } ?: CompletableDeferred<Unit>().also { serviceStart = it }
+            startPlaybackService(ready)
+            return
+        }
+        releasePlaybackState()
+    }
+
+    private fun releasePlaybackState() {
         stallMonitorJob?.cancel()
         serviceStart?.cancel(CancellationException("Playback service destroyed"))
         serviceStart = null
@@ -1019,6 +1237,7 @@ class PlaybackCoordinator(
         skipJob?.cancel()
         recoveryJob?.cancel()
         requestGeneration++
+        mediaGeneration++
         _playRequested.value = false
         playerInstance?.let { current ->
             if (current.playbackState == Player.STATE_READY) _currentPositionMs.value = current.currentPosition.coerceAtLeast(0)

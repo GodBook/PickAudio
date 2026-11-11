@@ -10,6 +10,8 @@ internal fun audioCacheKey(url: String, platform: String, songId: String, qualit
     val parsed = url.toHttpUrl()
     val resource = if (strong == null) url else "${parsed.scheme}://${parsed.host}:${parsed.port}${parsed.encodedPath}\u0000$strong"
     val input = listOf(platform, songId, quality, source, resource).joinToString("\u0000")
-    return "audio-v2:" + MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8))
+    // Older QQ entries could persist a preview/early EOF as a complete recording.
+    val prefix = if (platform == "tx") "audio-v3:" else "audio-v2:"
+    return prefix + MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8))
         .joinToString("") { "%02x".format(it) }
 }

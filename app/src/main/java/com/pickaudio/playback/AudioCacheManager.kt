@@ -1,6 +1,7 @@
 package com.pickaudio.playback
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
@@ -14,6 +15,28 @@ import androidx.media3.datasource.cache.SimpleCache
 import java.io.File
 import okhttp3.OkHttpClient
 import com.pickaudio.network.NetworkPolicy
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.IOException
+
+/** One durable generation keeps rejected QQ bytes unreachable even after process recreation. */
+internal class QqAudioCacheRevision(private val preferences: SharedPreferences) {
+    companion object { private val lock = Any() }
+
+    fun key(baseKey: String): String = synchronized(lock) {
+        "$baseKey:retry${preferences.getLong("revision", 0)}"
+    }
+
+    fun reject(key: String) = synchronized(lock) {
+        require(key.startsWith("audio-v3:")) { "Only QQ cache keys can be rejected" }
+        val rejected = key.substringAfterLast(":retry", "0").toLongOrNull()
+            ?: error("Invalid QQ cache revision")
+        val current = preferences.getLong("revision", 0)
+        // A delayed callback from an older stream must not rotate the current generation again.
+        if (current <= rejected && !preferences.edit().putLong("revision", Math.addExact(rejected, 1)).commit())
+            throw IOException("无法保存音频缓存失效状态，请重试")
+    }
+}
 
 @OptIn(UnstableApi::class)
 object AudioCacheManager {
@@ -25,6 +48,20 @@ object AudioCacheManager {
     @Volatile private var capacityBytes = MAX_CACHE_SIZE
     private val validators = object : LinkedHashMap<String, String>(128, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 128
+    }
+
+    private fun qqRevision(context: Context) = QqAudioCacheRevision(
+        context.getSharedPreferences("qq_audio_cache_revision", Context.MODE_PRIVATE))
+
+    internal suspend fun withQqRevision(context: Context, baseKey: String): String = withContext(Dispatchers.IO) {
+        qqRevision(context).key(baseKey)
+    }
+
+    suspend fun invalidateIncompleteAudioCache(context: Context, key: String) = withContext(Dispatchers.IO) {
+        // Commit before deleting spans: an in-flight writer may still finish under the old key.
+        qqRevision(context).reject(key)
+        synchronized(validators) { validators.remove(key) }
+        getCache(context).removeResource(key)
     }
 
     fun registerValidator(key: String, etag: String?) {

@@ -15,6 +15,7 @@ ksp {
 }
 dependencyLocking { lockAllConfigurations() }
 val pickAudioVersion = Properties().apply { rootProject.file("version.properties").inputStream().use { load(it) } }
+val isolatedTests = providers.gradleProperty("isolatedTests").map { it.toBoolean() }.getOrElse(false)
 
 android {
     namespace = "com.pickaudio"
@@ -59,12 +60,20 @@ android {
         }
         debug {
             isMinifyEnabled = false
+            if (isolatedTests) {
+                applicationIdSuffix = ".qqtest"
+                resValue("string", "app_name", "拾音 QQ 测试")
+            }
         }
         create("validation") {
             initWith(getByName("release"))
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += listOf("release")
             proguardFile("proguard-validation.pro")
+            if (isolatedTests) {
+                applicationIdSuffix = ".qqtest"
+                resValue("string", "app_name", "拾音 QQ 测试")
+            }
         }
     }
 
@@ -128,6 +137,7 @@ android {
 val generateUpdateFixtures = tasks.register("generateUpdateFixtures") {
     dependsOn("validateSigningDebug")
     inputs.property("minSdk", android.defaultConfig.minSdk ?: 35)
+    inputs.property("isolatedTests", isolatedTests)
     val output = layout.buildDirectory.dir("generated/updateFixtures")
     outputs.dir(output)
     doLast {
@@ -146,7 +156,8 @@ val generateUpdateFixtures = tasks.register("generateUpdateFixtures") {
         val signing = android.signingConfigs.getByName("debug")
         listOf("valid", "wrong-signer", "wrong-package").forEach { kind ->
             val manifest = directory.resolve("$kind.xml")
-            val packageName = if (kind == "wrong-package") "com.pickaudio.fixture" else "com.pickaudio"
+            val packageName = if (kind == "wrong-package") "com.pickaudio.fixture"
+                else if (isolatedTests) "com.pickaudio.qqtest" else "com.pickaudio"
             manifest.writeText("""<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="$packageName" android:versionCode="100000" android:versionName="99.0.0"><uses-sdk android:minSdkVersion="${android.defaultConfig.minSdk}" android:targetSdkVersion="36"/><application android:label="Isolated Test Fixture"/></manifest>""")
             val unsigned = directory.resolve("$kind-unsigned.apk")
             exec { commandLine(aapt, "link", "--manifest", manifest, "-I", platformJar, "-o", unsigned) }

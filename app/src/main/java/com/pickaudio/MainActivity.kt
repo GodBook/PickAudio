@@ -48,6 +48,10 @@ private data class SourceReturn(val platform: String?, val entryId: Long?, val c
 
 class MainActivity : ComponentActivity() {
     override fun onStart() { super.onStart(); (application as PickAudioApplication).playbackCoordinator.setUiVisible(true) }
+    override fun onResume() {
+        super.onResume()
+        (application as PickAudioApplication).downloadRepairMonitor.request()
+    }
     override fun onStop() { (application as PickAudioApplication).playbackCoordinator.setUiVisible(false); super.onStop() }
     var openDownloadsVersion by mutableIntStateOf(0)
         private set

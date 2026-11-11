@@ -60,6 +60,11 @@ internal class QqMusicPlaybackAdapter(
         }?.asJsonObject ?: error("QQ 没有返回该歌曲的地址")
         val path = item.get("purl")?.asString?.takeIf { it.isNotBlank() }
             ?: error("此 QQ 歌曲需要平台授权或当前不可用，请更换音源")
+        val trial = item.get("freeTrialInfo")
+        check(trial == null || trial.isJsonNull ||
+            (trial.isJsonPrimitive && trial.asJsonPrimitive.isBoolean && !trial.asBoolean)) {
+            "QQ 仅返回试听片段，请更换音源"
+        }
         // Never choose testfile/preview URLs or a URL belonging to another song.
         val servers = data.getAsJsonArray("sip")?.mapNotNull { element ->
             runCatching { element.asString.toHttpUrl() }.getOrNull()?.takeIf {
@@ -71,6 +76,10 @@ internal class QqMusicPlaybackAdapter(
         val url = server.resolve(path) ?: error("QQ 返回了无效播放地址")
         require(url.host == server.host && url.scheme == server.scheme && url.username.isEmpty() && url.password.isEmpty()) {
             "QQ 返回了无效播放地址"
+        }
+        // This route only requests M500/M800 MP3, not the RS-prefixed Hi-Res formats.
+        check(!url.pathSegments.last().startsWith("RS0", ignoreCase = true)) {
+            "QQ 仅返回试听片段，请更换音源"
         }
         return url.toString()
     }

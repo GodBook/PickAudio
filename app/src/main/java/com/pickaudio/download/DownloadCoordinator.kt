@@ -15,6 +15,7 @@ import com.pickaudio.data.model.*
 import com.pickaudio.data.preferences.UserPreferences
 import com.pickaudio.network.withResponse
 import com.pickaudio.online.AlternativeVersionException
+import com.pickaudio.online.AudioCompleteness
 import com.pickaudio.source.LxSourceManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
@@ -39,7 +40,8 @@ class DownloadCoordinator(
     private val client: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS).build(),
     private val scheduleOverride: (suspend () -> Unit)? = null,
-    private val publicationCheckpoint: (suspend (String) -> Unit)? = null
+    private val publicationCheckpoint: (suspend (String) -> Unit)? = null,
+    private val repairCheckpoint: (suspend (stage: String, taskId: String) -> Unit)? = null
 ) {
     private val downloadDao = database.downloadDao()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
@@ -48,6 +50,8 @@ class DownloadCoordinator(
     private val commands = Mutex()
     private val runnerMutex = Mutex()
     private val recoveryMutex = Mutex()
+    private val repairMutex = Mutex()
+    private val integrityChecks by lazy { DownloadIntegrityChecks(context) }
     private data class Worker(val generation: Long, val job: Job)
     private val workers = mutableMapOf<String, Worker>()
     private val blockedTracks = mutableMapOf<String, Int>()
@@ -95,7 +99,9 @@ class DownloadCoordinator(
         recoverInterrupted()
         val id = commands.withLock {
             val existing = downloadDao.getTaskByPlatformSong(platform, platformSongId, desired)
-            if (existing != null && existing.status == "COMPLETED" && isAccessible(existing.targetUri)) return@withLock existing.id
+            val completedAsset = existing?.targetUri?.let { database.localAssetDao().getAssetByUri(it) }
+            if (existing != null && existing.status == "COMPLETED" && isAccessible(existing.targetUri) &&
+                completedAsset?.let { it.sourceType != "DOWNLOADED" || it.isAvailable } != false) return@withLock existing.id
             database.withTransaction {
                 val ref = database.onlineRefDao().getByPlatformId(platform, platformSongId)
                 val canonicalId = ref?.trackId ?: trackId
@@ -110,11 +116,13 @@ class DownloadCoordinator(
                     title, artist, album, coverUri, platform, platformSongId, desired, "PENDING", durationMs = durationMs)
                 else if (existing.status in listOf("PAUSED", "FAILED", "COMPLETED", "CANCELLED")) {
                     if (existing.status == "COMPLETED") existing.targetUri?.let { uri ->
-                        database.localAssetDao().getAssetByUri(uri)?.let { database.localAssetDao().updateAvailability(it.id, false) }
+                        database.localAssetDao().getAssetByUri(uri)?.let { database.localAssetDao().updateAvailability(it.id, false, it.unavailableReason) }
                     }
                     DownloadLease.invalidate(existing, "PENDING").let {
                         if (existing.status == "COMPLETED") it.copy(targetUri = null, publishToken = null, publishStage = null,
-                            downloadedBytes = 0, totalBytes = 0, resourceEtag = null) else it
+                            downloadedBytes = 0, totalBytes = 0, resourceEtag = null,
+                            durationMs = durationMs.takeIf { value -> value > 0 } ?: existing.durationMs)
+                        else it.copy(durationMs = durationMs.takeIf { value -> value > 0 } ?: existing.durationMs)
                     }
                 } else existing
                 downloadDao.insertOrUpdate(task)
@@ -202,12 +210,22 @@ class DownloadCoordinator(
                 val owned = ownedMedia(uri)
                 if (owned != null && (task.publishStage == "REGISTERED" || !owned.pending) &&
                     task.status in ACTIVE_STATES && database.trackDao().getTrackById(task.trackId) != null) {
-                    val verified = try { verifyOutput(uri, task.totalBytes, ticket?.sha256); true }
+                    var verificationFailure: String? = null
+                    val verified = try {
+                        verifyOutput(uri, task.totalBytes, ticket?.sha256)
+                        inspectDownload(task, uri)
+                        true
+                    }
                         catch (e: CancellationException) { throw e }
-                        catch (_: Exception) { false }
+                        catch (e: Exception) { verificationFailure = e.message ?: "音频文件校验失败"; false }
                     if (verified) {
                         finalizePublication(task, uri, null)
                         file.delete()
+                        return@forEach
+                    }
+                    if (task.publishStage == "REGISTERED") {
+                        task = abandonPublication(task, verificationFailure.orEmpty())
+                        downloadDao.insertOrUpdate(DownloadLease.invalidate(task, "FAILED", verificationFailure))
                         return@forEach
                     }
                 }
@@ -311,6 +329,123 @@ class DownloadCoordinator(
             reconcileCompleted(it)
         }
     }
+
+    suspend fun repairIncompleteDownloads(limit: Int = Int.MAX_VALUE, scheduleNow: Boolean = true,
+        forceScan: Boolean = false): DownloadRepairReport = withContext(Dispatchers.IO) {
+        val report = repairMutex.withLock {
+            recoverInterrupted()
+            var checked = 0
+            var requeued = 0
+            var skipped = 0
+            val errors = mutableListOf<DownloadRepairFailure>()
+            val capabilities = mutableMapOf<String, List<String>>()
+            for (snapshot in downloadDao.getCompletedTasks(limit.coerceAtLeast(0))) {
+                currentCoroutineContext().ensureActive()
+                try {
+                    val value = snapshot.targetUri
+                    val asset = value?.let { database.localAssetDao().getAssetByUri(it) }
+                    val expected = expectedDuration(snapshot)
+                    if (value == null || asset == null || asset.sourceType != "DOWNLOADED" || asset.trackId != snapshot.trackId || expected <= 0) {
+                        skipped++
+                        continue
+                    }
+                    val uri = Uri.parse(value)
+                    if (ownedMedia(uri)?.pending != false) { skipped++; continue }
+                    var fingerprint = integrityChecks.fingerprint(snapshot, expected)
+                    if (!forceScan && asset.isAvailable && integrityChecks.wasChecked(snapshot.id, fingerprint)) {
+                        skipped++
+                        continue
+                    }
+                    checked++
+                    var actualDuration: Long? = null
+                    var failure: String? = null
+                    var stable = false
+                    for (attempt in 0..1) {
+                        actualDuration = null
+                        failure = try {
+                            val audio = AndroidAudioProbe.inspect(context, uri, validatePackets = true)
+                            actualDuration = audio.durationMs
+                            AudioCompleteness.failure(expected, audio.durationMs)
+                        } catch (e: CancellationException) { throw e }
+                        catch (e: Exception) {
+                            val reason = e.message.orEmpty()
+                            // Decoder/provider failures can be temporary. Only explicit packet or
+                            // duration evidence authorizes replacing a previously published file.
+                            if (reason !in setOf("WAV 文件内容被截断", "音频末尾不完整，请重新下载",
+                                    "音频文件没有完整数据帧", "音频数据帧无效", "文件没有有效音频时长")) throw e
+                            reason
+                        }
+                        repairCheckpoint?.invoke("INSPECTED", snapshot.id)
+                        val after = integrityChecks.fingerprint(snapshot, expected)
+                        if (fingerprint == null || fingerprint == after) { stable = true; break }
+                        if (attempt == 0) {
+                            // MediaProvider may publish its size/generation after the file has
+                            // already changed. Re-inspect once in this scan instead of deferring
+                            // a known-short file until the next foreground event.
+                            delay(100)
+                            fingerprint = integrityChecks.fingerprint(snapshot, expected)
+                        }
+                    }
+                    if (!stable) {
+                        skipped++
+                        errors.add(DownloadRepairFailure(snapshot.id, snapshot.title, "检查期间文件仍在变化，请稍后重新检查"))
+                        continue
+                    }
+                    if (failure == null) {
+                        fingerprint?.let { integrityChecks.passed(snapshot.id, it) }
+                        continue
+                    }
+                    val supported = capabilities[snapshot.platform] ?: sourceManager.supportedQualities(snapshot.platform)
+                        .also { capabilities[snapshot.platform] = it }
+                    val canDownload = snapshot.targetQuality in supported
+                    val changed = commands.withLock { database.withTransaction {
+                        val current = downloadDao.getTaskById(snapshot.id) ?: return@withTransaction false
+                        if (current.status != "COMPLETED" || current.targetUri != snapshot.targetUri ||
+                            current.executionGeneration != snapshot.executionGeneration || current.trackId in blockedTracks)
+                            return@withTransaction false
+                        val currentAsset = database.localAssetDao().getAssetByUri(value) ?: return@withTransaction false
+                        if (currentAsset.id != asset.id || currentAsset.sourceType != "DOWNLOADED" ||
+                            currentAsset.trackId != current.trackId || ownedMedia(uri)?.pending != false) return@withTransaction false
+                        val currentExpected = expectedDuration(current)
+                        if (currentExpected <= 0 || actualDuration?.let { AudioCompleteness.failure(currentExpected, it) == null } == true)
+                            return@withTransaction false
+                        database.localAssetDao().updateAvailability(asset.id, false, "下载文件不完整，已保留旧文件：$failure")
+                        val status = if (canDownload) "PENDING" else "FAILED"
+                        val message = if (canDownload) "检测到下载音频不完整，正在重新下载"
+                            else "下载音频不完整，当前音源不支持原下载音质 ${current.targetQuality}，请换源后重试"
+                        val replacement = DownloadLease.invalidate(current, status, message).copy(targetUri = null,
+                            publishToken = null, publishStage = null, resourceEtag = null, tempFilePath = null,
+                            downloadedBytes = 0, totalBytes = 0, actualQuality = null, durationMs = currentExpected)
+                        downloadDao.insertOrUpdate(replacement)
+                        if (canDownload) pendingGenerations[current.id] = replacement.executionGeneration
+                        true
+                    } }
+                    if (!changed) { skipped++; continue }
+                    integrityChecks.forget(snapshot.id)
+                    if (canDownload) {
+                        requeued++
+                        repairCheckpoint?.invoke("REQUEUED", snapshot.id)
+                    } else {
+                        errors.add(DownloadRepairFailure(snapshot.id, snapshot.title, "当前音源不支持原下载音质 ${snapshot.targetQuality}，请换源后重试"))
+                    }
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    skipped++
+                    errors.add(DownloadRepairFailure(snapshot.id, snapshot.title, e.message ?: "暂时无法检查下载文件"))
+                }
+            }
+            integrityChecks.retain(downloadDao.getAllTasksSync().map { it.id }.toSet())
+            DownloadRepairReport(checked, requeued, skipped, errors)
+        }
+        if (scheduleNow) schedulePendingRepairs()
+        report
+    }
+
+    suspend fun schedulePendingRepairs(): Boolean {
+        if (downloadDao.getPendingTasks().isEmpty()) return false
+        if (scheduleOverride == null && !context.getSystemService(JobScheduler::class.java).canRunUserInitiatedJobs()) return false
+        return schedule(force = true)
+    }
     private suspend fun reconcileCompleted(task: DownloadTaskEntity) {
         val access = task.targetUri?.let { com.pickaudio.data.repository.checkAssetAccess(context, Uri.parse(it)) }
         if (access?.available == true) return
@@ -350,19 +485,37 @@ class DownloadCoordinator(
             result to workers[id]?.job
         } ?: return
         cancelled.second?.join()
+        var cancelledTask = cancelled.first
         cancelled.first.targetUri?.let { value ->
             val uri = Uri.parse(value)
             val ticket = PublicationTicket.decode(cancelled.first.publishToken)
-            if (ownedMedia(uri)?.pending == false && ticket != null &&
-                runCatching { verifyOutput(uri, cancelled.first.totalBytes, ticket.sha256) }.isSuccess) {
-                finalizePublication(cancelled.first, uri, null)
-                return
+            if (ownedMedia(uri)?.pending == false) {
+                val failure = try {
+                    require(ticket != null) { "下载校验信息缺失，请重新下载" }
+                    verifyOutput(uri, cancelled.first.totalBytes, ticket.sha256)
+                    inspectDownload(cancelled.first, uri)
+                    null
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { e.message ?: "音频文件校验失败" }
+                if (failure == null) {
+                    finalizePublication(cancelled.first, uri, null)
+                    return
+                }
+                commands.withLock {
+                    val current = downloadDao.getTaskById(id) ?: return
+                    if (current.status != "CANCELLED" || current.executionGeneration != cancelled.first.executionGeneration) return
+                    // Keep an exposed invalid file and its repair record when cancelling.
+                    cancelledTask = abandonPublication(current, failure)
+                    downloadDao.insertOrUpdate(cancelledTask)
+                }
             }
         }
-        cleanupOutput(cancelled.first)
-        part(id).delete()
         commands.withLock {
-            if (downloadDao.getTaskById(id)?.status == "CANCELLED") downloadDao.deleteTask(id)
+            val current = downloadDao.getTaskById(id) ?: return
+            if (current.status != "CANCELLED" || current.executionGeneration != cancelled.first.executionGeneration) return
+            cleanupOutput(cancelledTask)
+            part(id).delete()
+            downloadDao.deleteTask(id)
         }
         _versionCandidates.update { it - id }
     }
@@ -452,7 +605,15 @@ class DownloadCoordinator(
             require(database.trackDao().getTrackById(task.trackId) != null) { "歌曲记录不存在，请重新添加歌曲" }
             if (task.publishStage == "REGISTERED" && task.targetUri != null) {
                 val uri = Uri.parse(task.targetUri)
-                verifyOutput(uri, task.totalBytes, PublicationTicket.decode(task.publishToken)?.sha256)
+                try {
+                    verifyOutput(uri, task.totalBytes, PublicationTicket.decode(task.publishToken)?.sha256)
+                    inspectDownload(task, uri)
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    val abandoned = abandonPublication(task, e.message ?: "音频文件校验失败")
+                    mutate(id, generation) { abandoned.copy(executionGeneration = it.executionGeneration) }
+                    throw e
+                }
                 finalizePublication(task, uri, generation)
                 file.delete()
                 return
@@ -466,10 +627,16 @@ class DownloadCoordinator(
                 transfer(id, generation, task, file, url, networkClient)
             }
             mutate(id, generation) { it.copy(status = "VERIFYING") }
-            val inspected = AndroidAudioProbe.inspect(context, Uri.fromFile(file), validatePackets = true)
+            val inspected = try { inspectDownload(task, Uri.fromFile(file)) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                // Failed content must be resolved and fetched again, including old VERIFIED files.
+                mutate(id, generation) { it.copy(publishToken = null, publishStage = null, resourceEtag = null) }
+                throw e
+            }
             val format = inspected.info
-            AudioFormatProbe.requireRequestedQuality(task.targetQuality, format)
-            val duration = inspected.durationMs
+            // Keep a trusted full-song duration through durable publication checkpoints.
+            val duration = expectedDuration(task).takeIf { it > 0 } ?: inspected.durationMs
             val actual = format.label + (format.qualityNotice(task.targetQuality)?.let { " · $it" } ?: "")
             val publication = ticket?.takeIf { verifiedPartial } ?: PublicationTicket.create(digest(file))
             task = mutate(id, generation) { it.copy(status = "PUBLISHING", publishStage = "VERIFIED",
@@ -578,6 +745,28 @@ class DownloadCoordinator(
         hash.digest().joinToString("") { "%02x".format(it) }
     }
 
+    private suspend fun expectedDuration(task: DownloadTaskEntity): Long {
+        val metadata = database.onlineRefDao().getByPlatformId(task.platform, task.platformSongId)?.platformMetadataJson ?: "{}"
+        return AudioCompleteness.expectedDurationMs(task.platform, metadata, task.durationMs)
+    }
+
+    private suspend fun inspectDownload(task: DownloadTaskEntity, uri: Uri): InspectedAudio {
+        val inspected = AndroidAudioProbe.inspect(context, uri, validatePackets = true)
+        AudioFormatProbe.requireRequestedQuality(task.targetQuality, inspected.info)
+        AudioCompleteness.requireComplete(expectedDuration(task), inspected.durationMs)
+        return inspected
+    }
+
+    private suspend fun abandonPublication(task: DownloadTaskEntity, reason: String): DownloadTaskEntity {
+        task.targetUri?.let { value ->
+            val uri = Uri.parse(value)
+            database.localAssetDao().getAssetByUri(value)?.let { database.localAssetDao().updateAvailability(it.id, false, reason) }
+            // An exposed file belongs to the user's music collection; retain it for repair.
+            if (ownedMedia(uri)?.pending == true) context.contentResolver.delete(uri, null, null)
+        }
+        return task.copy(targetUri = null, publishToken = null, publishStage = null, resourceEtag = null)
+    }
+
     private suspend fun publish(task: DownloadTaskEntity, generation: Long, file: File,
         format: DetectedAudioFormat, ticket: PublicationTicket) {
         reserve(task.id, file.length())
@@ -645,6 +834,9 @@ class DownloadCoordinator(
         commands.withLock {
             val row = downloadDao.getTaskById(task.id) ?: error("下载任务不存在")
             if (generation != null && !DownloadLease.canWrite(row, generation)) throw CancellationException("任务已暂停")
+            // A newer enqueue may supersede cancellation while its exposed file is inspected.
+            if (task.status == "CANCELLED" &&
+                (row.status != "CANCELLED" || row.executionGeneration != task.executionGeneration)) return@withLock
             require(ownedMedia(uri) != null) { "目标文件不属于此下载" }
             val safe = { value: String -> value.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(60) }
             val extension = context.contentResolver.getType(uri)?.substringAfterLast('/')?.let { if (it == "mpeg") "mp3" else if (it == "mp4") "m4a" else it } ?: "audio"
@@ -654,15 +846,16 @@ class DownloadCoordinator(
             }
             check(context.contentResolver.update(uri, update, null, null) > 0) { "无法公开音乐文件，请继续下载以重试" }
             publicationCheckpoint?.invoke("EXPOSED")
+            val duration = expectedDuration(row).takeIf { it > 0 } ?: row.durationMs
             database.withTransaction {
                 val asset = database.localAssetDao().getAssetByUri(uri.toString())
                 if (asset != null) database.localAssetDao().updateAvailability(asset.id, true)
                 else database.localAssetDao().insertOrUpdate(LocalAssetEntity(trackId = row.trackId, uri = uri.toString(),
                     sourceType = "DOWNLOADED", fileSize = row.totalBytes, mimeType = context.contentResolver.getType(uri),
                     format = extension, fileHash = PublicationTicket.decode(row.publishToken)?.sha256, folderName = "Music/PickAudio"))
-                database.trackDao().getTrackById(row.trackId)?.let { database.trackDao().insertOrUpdate(it.copy(durationMs = row.durationMs.takeIf { it > 0 } ?: it.durationMs)) }
+                database.trackDao().getTrackById(row.trackId)?.let { database.trackDao().insertOrUpdate(it.copy(durationMs = duration.takeIf { it > 0 } ?: it.durationMs)) }
                 downloadDao.insertOrUpdate(row.copy(status = "COMPLETED", targetUri = uri.toString(), publishStage = "COMPLETED",
-                    downloadedBytes = row.totalBytes, bytesPerSecond = 0, etaSeconds = null, errorMessage = null, updatedAt = System.currentTimeMillis()))
+                    durationMs = duration, downloadedBytes = row.totalBytes, bytesPerSecond = 0, etaSeconds = null, errorMessage = null, updatedAt = System.currentTimeMillis()))
             }
         }
     }
