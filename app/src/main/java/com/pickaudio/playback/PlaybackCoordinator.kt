@@ -75,6 +75,8 @@ class PlaybackCoordinator(
 
     private var requestJob: Job? = null
     private var serviceStart: CompletableDeferred<Unit>? = null
+    private var playbackServiceInstance: Any? = null
+    private var playbackServiceRequestGeneration = -1L
     private var requestGeneration = 0L
     @Volatile private var mediaGeneration = 0L
     private var restoringJob: Job? = null
@@ -747,10 +749,7 @@ class PlaybackCoordinator(
     private suspend fun ensurePlaybackService() {
         val ready = serviceStart?.takeUnless { it.isCompleted } ?: CompletableDeferred<Unit>().also {
             serviceStart = it
-            try {
-                androidx.core.content.ContextCompat.startForegroundService(context,
-                    android.content.Intent(context, PlaybackService::class.java).setAction(PlaybackService.ACTION_START_PLAYBACK))
-            } catch (e: Exception) { it.completeExceptionally(e) }
+            startPlaybackService(it)
         }
         try {
             // Android 15+ rejects background audio focus requests until a foreground service exists.
@@ -764,9 +763,27 @@ class PlaybackCoordinator(
         }
     }
 
+    private fun startPlaybackService(ready: CompletableDeferred<Unit>) {
+        try {
+            androidx.core.content.ContextCompat.startForegroundService(context,
+                android.content.Intent(context, PlaybackService::class.java).setAction(PlaybackService.ACTION_START_PLAYBACK))
+        } catch (e: Exception) { ready.completeExceptionally(e) }
+    }
+
+    internal fun onPlaybackServiceCreated(instance: Any) {
+        playbackServiceInstance = instance
+        playbackServiceRequestGeneration = requestGeneration
+    }
+
     internal fun onPlaybackServiceReady() { serviceStart?.complete(Unit) }
 
-    internal fun onPlaybackServiceStartFailed(error: Exception) {
+    internal fun onPlaybackServiceReady(instance: Any) {
+        if (playbackServiceInstance !== instance) return
+        serviceStart?.complete(Unit)
+    }
+
+    internal fun onPlaybackServiceStartFailed(error: Exception, instance: Any? = null) {
+        if (instance != null && playbackServiceInstance !== instance) return
         Log.w("PlaybackCoordinator", "无法启动后台播放服务", error)
         serviceStart?.completeExceptionally(error)
         requestJob?.cancel()
@@ -913,7 +930,7 @@ class PlaybackCoordinator(
                     .build()
 
                 // A controller can request play during a paused preparation.
-                if (_playRequested.value && !autoPlay) ensurePlaybackService()
+                if (_playRequested.value && (!autoPlay || playbackServiceInstance == null)) ensurePlaybackService()
                 player.repeatMode = currentRepeatMode()
                 player.setMediaItem(mediaItem)
                 player.prepare()
@@ -1190,6 +1207,26 @@ class PlaybackCoordinator(
     }
 
     fun onServiceDestroyed() {
+        playbackServiceInstance = null
+        releasePlaybackState()
+    }
+
+    internal fun onServiceDestroyed(instance: Any) {
+        // stopService can disappear from the platform's service list before onDestroy runs.
+        // A queued callback from that instance must not tear down a replacement or retry.
+        if (playbackServiceInstance !== instance) return
+        playbackServiceInstance = null
+        val newRequest = _playRequested.value && _uiState.value.phase == PlaybackPhase.RESOLVING &&
+            (serviceStart?.isCompleted == false || requestGeneration != playbackServiceRequestGeneration)
+        if (newRequest) {
+            val ready = serviceStart?.takeUnless { it.isCompleted } ?: CompletableDeferred<Unit>().also { serviceStart = it }
+            startPlaybackService(ready)
+            return
+        }
+        releasePlaybackState()
+    }
+
+    private fun releasePlaybackState() {
         stallMonitorJob?.cancel()
         serviceStart?.cancel(CancellationException("Playback service destroyed"))
         serviceStart = null

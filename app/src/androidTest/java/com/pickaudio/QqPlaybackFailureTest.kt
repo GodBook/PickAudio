@@ -15,9 +15,11 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.pickaudio.data.db.LocalAssetEntity
+import com.pickaudio.data.db.PickAudioDatabase
 import com.pickaudio.data.model.PlaybackPhase
 import com.pickaudio.data.model.Quality
 import com.pickaudio.data.model.SearchSongItem
@@ -26,6 +28,8 @@ import com.pickaudio.data.model.toTrack
 import com.pickaudio.data.repository.ensureTrackIdentity
 import com.pickaudio.playback.PlaybackCoordinator
 import com.pickaudio.playback.PlaybackService
+import com.pickaudio.playback.QueueSessionPlayer
+import com.pickaudio.source.LxSourceManager
 import com.pickaudio.ui.screens.PlayerScreen
 import com.pickaudio.ui.theme.PickAudioTheme
 import kotlinx.coroutines.*
@@ -194,6 +198,75 @@ class QqPlaybackFailureTest {
             assertFalse(coordinator.playRequested.value)
             withContext(Dispatchers.Main) { coordinator.setQueueAndPlay(listOf(local)) }
             await("service shutdown: local playback advances after retry") { coordinator.isPlaying.value && coordinator.currentPositionMs.value > 0 }
+        }
+    }
+
+    @Test fun lateServiceDestructionCannotCancelANewerRetryOrReleaseItsPlayer() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(app, PickAudioDatabase::class.java).build()
+        val quality = app.userPreferences.defaultOnlineQuality.first()
+        val oldService = Any()
+        val replacementService = Any()
+        var coordinator: PlaybackCoordinator? = null
+        try {
+            app.userPreferences.setDefaultOnlineQuality(Quality.Q128K)
+            LxSourceManager(app, database).use { manager ->
+                val source = manager.importSourceFromCode("""
+                    lx.on(lx.EVENT_NAMES.request, () => Promise.reject(new Error('确定的 QQ 测试拒绝')));
+                    lx.send(lx.EVENT_NAMES.inited, {status:true,sources:{tx:{name:'服务生命周期回归',actions:['musicUrl'],qualitys:['128k']}}});
+                """.trimIndent())
+                manager.selectSourceForPlatform("tx", source.id)
+                val copy = withContext(Dispatchers.Main) { PlaybackCoordinator(app, database, manager, app.userPreferences) }
+                coordinator = copy
+                await("late service: isolated coordinator restores") { copy.restored.value }
+                val qq = SearchSongItem("tx", "late_service_qq", "服务销毁竞态回归", "测试", "", 90_000,
+                    metadataJson = """{"songid":123,"strMediaMid":"fixture_media_mid"}""").toTrack()
+                database.ensureTrackIdentity(qq)
+                withContext(Dispatchers.Main) {
+                    copy.addTracksToQueue(listOf(qq))
+                    copy.playQueueItem(0, autoPlay = false)
+                }
+                await("late service: initial source rejection") { copy.uiState.value.phase == PlaybackPhase.ERROR }
+                withContext(Dispatchers.Main) {
+                    copy.onPlaybackServiceCreated(oldService)
+                    val retryPlayer = copy.player
+                    copy.retryCurrent()
+                    // Reproduce the exact window: the new request exists, while the old
+                    // instance's delayed onDestroy arrives before the replacement onCreate.
+                    copy.onServiceDestroyed(oldService)
+                    assertEquals(PlaybackPhase.RESOLVING, copy.uiState.value.phase)
+                    assertTrue(copy.playRequested.value)
+                    assertSame(retryPlayer, copy.player)
+                    // Let the retry consume the pending start before the replacement acknowledges it.
+                    yield()
+                }
+                withContext(Dispatchers.Main) {
+                    copy.onPlaybackServiceCreated(replacementService)
+                    val retryPlayer = copy.player
+                    copy.onServiceDestroyed(oldService)
+                    QueueSessionPlayer(copy, onRelease = {}).release()
+                    assertEquals(PlaybackPhase.RESOLVING, copy.uiState.value.phase)
+                    assertTrue(copy.playRequested.value)
+                    assertSame(retryPlayer, copy.player)
+                    copy.onPlaybackServiceReady(replacementService)
+                }
+                await("late service: retry retains its genuine source error") { copy.uiState.value.phase == PlaybackPhase.ERROR }
+                assertTrue(copy.uiState.value.message.orEmpty().contains("确定的 QQ 测试拒绝"))
+                assertFalse(copy.playRequested.value)
+            }
+        } finally {
+            coordinator?.let { copy ->
+                withContext(Dispatchers.Main) {
+                    copy.clearQueue()
+                    copy.onPlaybackServiceReady()
+                    copy.onServiceDestroyed(replacementService)
+                    copy.onServiceDestroyed(oldService)
+                    copy.onServiceDestroyed()
+                }
+                copy.flushPersistence()
+            }
+            app.userPreferences.setDefaultOnlineQuality(quality)
+            withContext(Dispatchers.Main) { app.stopService(Intent(app, PlaybackService::class.java)) }
+            database.close()
         }
     }
 
