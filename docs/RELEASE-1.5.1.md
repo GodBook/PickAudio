@@ -14,4 +14,6 @@
 
 版本为 1.5.1/code 20，数据库保持 v5，支持 Android 15/API 35 及以上。实际音质和歌曲可用性仍取决于平台授权及音源；接口拒绝时会提示重试或换源，不替换其他录音。
 
+本次按使用者要求发布 [未签名构建](https://github.com/GodBook/PickAudio/releases/tag/v1.5.1)，资产为 `PickAudio-v1.5.1-unsigned.apk`。Android 要求 APK 有签名才能安装，因此不能直接安装或覆盖现有版本；应用内更新入口仍保留可安装的 v1.5.0。
+
 验证细节见 [v1.5.1 验证记录](VALIDATION-1.5.1.md)。

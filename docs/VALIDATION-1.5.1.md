@@ -2,7 +2,7 @@
 
 日期：2026-11-11（Asia/Shanghai）。目标：修复 QQ 播放和下载可能接受半首音频的问题，测试后更新 GitHub 和正式 Release。
 
-状态：QQ 完整性校验和自动修复已实现，最终源码 `498727674c1a3da70fa6d2c0cfd3cd5836b4f9ea` 已通过本地构建、USB 真机定向回归与 CI 四组设备矩阵；正式发布等待原签名凭据。工作分支 `codex/fix-qq-complete-audio`，PR [#7](https://github.com/GodBook/PickAudio/pull/7)；原有未提交文档整理不属于本次提交。
+状态：QQ 完整性校验和自动修复已实现，最终源码 `498727674c1a3da70fa6d2c0cfd3cd5836b4f9ea` 已通过本地构建、USB 真机定向回归与 CI 四组设备矩阵；2026-11-11 按使用者明确要求直接发布未签名构建，不再等待签名凭据。未签名 APK 无法直接安装，也没有完成原签名覆盖升级验收。源码 PR [#7](https://github.com/GodBook/PickAudio/pull/7) 已合并；原有未提交文档整理不属于本次提交。
 
 ## 已确认的行为
 
@@ -44,10 +44,14 @@
 
 最终未签名 Release 候选为 `app/build/outputs/apk/release/app-release-unsigned.apk`，1.5.1/code 20，8,277,538 字节，SHA-256 `25a2904e86b017560f12379fc9f81e48cbca60f6c6cfa30ff39eeb667ccf648c`。包信息及 ZIP/ELF 16 KiB 对齐核查通过；`publishable=false`，不能作为正式升级包发布。
 
-## 下一步
+## 发布结果
 
-按用户要求全部改用 USB 手机继续回归。本轮新建的模拟器 `PickAudio_QQ_API36_20261111` 已关闭，其虚拟设备文件夹、注册 INI 和 SDK 中的 emulator 程序目录均送入 Windows 回收站，并查询确认可恢复；不再使用电脑模拟器。
+本地回归按用户要求使用 USB 手机。本轮新建的模拟器 `PickAudio_QQ_API36_20261111` 已关闭，其虚拟设备文件夹、注册 INI 和 SDK 中的 emulator 程序目录均送入 Windows 回收站，并查询确认可恢复；不再使用电脑模拟器。
 
-GitHub 源码更新通过 PR [#7](https://github.com/GodBook/PickAudio/pull/7) 交付，最终补充提交仅修改本验证记录与发布说明，`app` 源码及版本配置与已测试的 `4987276` 完全相同。v1.5.1/code 20 Release 草稿 ID 为 `441512226`，尚未发布且没有安装包资产。
+GitHub 源码更新通过 PR [#7](https://github.com/GodBook/PickAudio/pull/7) 合并为 `7b9ee0eeb2d10463119421ebddfe6506da844b2c`，`app` 源码及版本配置与已测试的 `4987276` 完全相同。2026-11-11 20:13（Asia/Shanghai）已公开发布 [v1.5.1](https://github.com/GodBook/PickAudio/releases/tag/v1.5.1)，Release ID `441512226`，tag 指向该合并提交。
 
-正式发布仍缺原签名凭据。原证书 SHA-256 为 `1e564b554f48b6a69d80e6d76c704e8b16e9a600d2511205754839c729d4a281`。`release.jks` 仍在，但旧 `app/build/release-1.5.0/sign-local.ps1` 依赖的 `app/build/release-1.4.5/sign-release.ps1` 已缺失，现有环境、凭据管理器及历史辅助脚本未找回密码。已准备签名与证书核验脚本；恢复凭据后需验证原签名覆盖升级、上传 APK/校验文件、验证公开下载。根目录 `version.json` 在实际公开前保持 1.5.0，不用新证书或未签名 APK 代替正式包。
+发布资产为 `PickAudio-v1.5.1-unsigned.apk`、`SHA256SUMS.txt` 和 `artifact-info.json`。APK 为 8,277,538 字节，GitHub 服务端提供的 SHA-256 与本地候选一致：`25a2904e86b017560f12379fc9f81e48cbca60f6c6cfa30ff39eeb667ccf648c`。重新执行 `verify-release.ps1 -AllowUnsigned` 通过包信息和对齐检查；`apksigner verify` 按预期报告缺少签名。
+
+通过 `gh release download` 回下载已发布 APK，8,277,538 字节及 SHA-256 与本地候选完全一致。匿名浏览器下载地址的 curl 检查连接超时；匿名资产 API 已收到部分 APK 数据，但未在 60 秒内完成，因此不将匿名全文件下载计为通过。Release 公开状态、tag 和资产服务端摘要已核实。
+
+本次遵照“不要签名，直接更新 release”的新要求，没有使用原证书或其他证书，也未操作手机正式版。Android 要求 APK 有签名才能安装，因此此发布仅提供未签名构建，不能当作可直接安装、覆盖升级的正式包。Release 说明与资产元数据均标明限制；未签名构建不设为 Latest，`version.json` 和应用内更新入口保留可安装的 v1.5.0。
