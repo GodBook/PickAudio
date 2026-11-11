@@ -41,6 +41,7 @@ import org.junit.runner.RunWith
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Uses an isolated database/source and real Media3 decoding on a disposable test device. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -134,24 +135,28 @@ class QqPlaybackCompletenessTest {
             withContext(Dispatchers.Main) { fixture.coordinator.setPlaybackMode(PlaybackMode.SINGLE_LOOP) }
             fixture.prepare(fixture.track())
             awaitPausedReady(fixture.coordinator)
+            await { fixture.coordinator.player.bufferedPosition >= 60_000L }
+            val originalMedia = withContext(Dispatchers.Main) { fixture.coordinator.player.currentMediaItem }
+            // Both further source resolution and CDN requests are unavailable at the boundary.
+            // The complete recording already in the cache must continue repeating.
+            val selection = fixture.database.sourceDao().getSelectionForPlatform("tx")!!
+            fixture.database.sourceDao().setPlatformSelection(selection.copy(sourceId = null))
+            fixture.rejectNetwork.set(true)
             withContext(Dispatchers.Main) {
                 // Seeking is a discontinuity rather than an incomplete natural end.
                 fixture.coordinator.seekTo(59_000)
                 fixture.coordinator.player.play()
             }
-            // The coordinator's manual repeat starts its own request and waits for the service.
-            // Complete only this isolated coordinator's readiness instead of coupling test state
-            // to the production application's separate playback coordinator.
             withTimeout(15_000) {
                 while (!withContext(Dispatchers.Main) {
                     assertNotEquals(fixture.coordinator.uiState.value.message, PlaybackPhase.ERROR,
                         fixture.coordinator.uiState.value.phase)
-                    fixture.coordinator.onPlaybackServiceReady()
                     fixture.coordinator.player.playbackState == Player.STATE_READY &&
-                        fixture.coordinator.player.currentPosition in 100L..5000L
+                        fixture.coordinator.player.currentPosition in 100L..5000L && fixture.coordinator.isPlaying.value
                 }) delay(50)
             }
             assertEquals(0, fixture.coordinator.currentIndex.value)
+            withContext(Dispatchers.Main) { assertEquals(originalMedia, fixture.coordinator.player.currentMediaItem) }
             assertNotEquals(PlaybackPhase.ERROR, fixture.coordinator.uiState.value.phase)
         }
     }
@@ -195,7 +200,8 @@ class QqPlaybackCompletenessTest {
         coordinator.player.playbackState == Player.STATE_READY && !coordinator.player.playWhenReady
     }
 
-    private inner class Fixture(val database: PickAudioDatabase, val coordinator: PlaybackCoordinator) {
+    private inner class Fixture(val database: PickAudioDatabase, val coordinator: PlaybackCoordinator,
+        val rejectNetwork: AtomicBoolean) {
         val files = mutableListOf<File>()
         fun file(bytes: ByteArray): File = File.createTempFile("qq-completeness-", ".wav", context.filesDir)
             .also { it.writeBytes(bytes); files.add(it) }
@@ -232,8 +238,10 @@ class QqPlaybackCompletenessTest {
             MockWebServer().use { server ->
                 val full = wave(60)
                 val short = wave(10)
+                val rejectNetwork = AtomicBoolean()
                 server.dispatcher = object : Dispatcher() {
                     override fun dispatch(request: RecordedRequest): MockResponse {
+                        if (rejectNetwork.get()) return MockResponse().setResponseCode(503)
                         val bytes = if (request.path?.substringBefore('?') == "/short.wav") short else full
                         val response = MockResponse().setHeader("Content-Type", "audio/wav")
                             .setHeader("Accept-Ranges", "bytes").setHeader("ETag", "\"${bytes.size}\"")
@@ -253,7 +261,7 @@ class QqPlaybackCompletenessTest {
                     """.trimIndent())
                     manager.selectSourceForPlatform("tx", source.id)
                     val coordinator = withContext(Dispatchers.Main) { PlaybackCoordinator(context, database, manager, preferences) }
-                    val fixture = Fixture(database, coordinator)
+                    val fixture = Fixture(database, coordinator, rejectNetwork)
                     try {
                         await { coordinator.restored.value }
                         block(fixture)

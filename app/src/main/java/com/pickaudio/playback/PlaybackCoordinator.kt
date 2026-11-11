@@ -104,6 +104,8 @@ class PlaybackCoordinator(
     private var cacheInvalidation: Deferred<Unit>? = null
     private var resolvedExpectedDurationMs = 0L
     private var requestedStartPositionMs = 0L
+    private data class RenderedAudioEnd(val generation: Long, val positionMs: Long, val noSamples: Boolean)
+    @Volatile private var renderedAudioEnd: RenderedAudioEnd? = null
     val player: ExoPlayer get() = playerInstance ?: createPlayer().also { playerInstance = it }
     private fun createPlayer(): ExoPlayer {
         val dataSourceFactory = AudioCacheManager.createDataSourceFactory(context, sourceManager.audioClient())
@@ -133,6 +135,7 @@ class PlaybackCoordinator(
 
                     private fun resetObservation() {
                         epoch++
+                        renderedAudioEnd = null
                         lastSampleEndUs = 0L
                         bufferGeneration = -1L
                         endReported = false
@@ -169,6 +172,8 @@ class PlaybackCoordinator(
                         val generation = bufferGeneration.takeIf { it >= 0 } ?: mediaGeneration
                         val noSamples = lastSampleEndUs <= 0
                         val actualEndMs = (lastSampleEndUs / 1000).coerceAtLeast(1)
+                        // Publish before STATE_ENDED can trigger a seek/repeat and clear the sink.
+                        renderedAudioEnd = RenderedAudioEnd(generation, actualEndMs, noSamples)
                         scope.launch(Dispatchers.Main) {
                             // Seeking explicitly to the end can produce EOS without another sample.
                             val soughtToEnd = noSamples && resolvedExpectedDurationMs > 0 &&
@@ -330,7 +335,9 @@ class PlaybackCoordinator(
             } else if (state == Player.STATE_ENDED) {
                 // Some containers retain a full-length header even when the samples end early.
                 // An early EOF must not be treated as successful completion of the recording.
-                if (rejectIncompleteStream(player.currentPosition.coerceAtLeast(1))) return
+                val samples = renderedAudioEnd?.takeIf { it.generation == mediaGeneration }
+                    ?.takeUnless { it.noSamples && requestedStartPositionMs >= resolvedExpectedDurationMs }
+                if (rejectIncompleteStream(samples?.positionMs ?: player.currentPosition.coerceAtLeast(1))) return
                 handleTrackEnded()
             }
         }
@@ -819,6 +826,20 @@ class PlaybackCoordinator(
 
         val q = _queue.value
         if (q.isEmpty()) { return }
+        if (_playbackMode.value == PlaybackMode.SINGLE_LOOP && resolvedExpectedDurationMs > 0 &&
+            player.currentMediaItem?.localConfiguration?.uri?.scheme in listOf("http", "https")) {
+            // Completeness was checked against the renderer's EOS above. Keep the current URL
+            // and cached recording usable when the source API is offline at the loop boundary.
+            requestedStartPositionMs = 0L
+            _currentPositionMs.value = 0L
+            player.seekTo(0L)
+            player.prepare()
+            player.playWhenReady = _playRequested.value
+            _uiState.value = _uiState.value.copy(phase = PlaybackPhase.BUFFERING)
+            startStallMonitor(requestGeneration)
+            saveSnapshot()
+            return
+        }
         val next = queueModel.next(_playbackMode.value, naturalEnd = true)
         if (next == null) pause() else {
             publishQueue()
@@ -838,6 +859,7 @@ class PlaybackCoordinator(
         if (!automatic) { consecutiveFailures = 0 }
         val generation = ++requestGeneration
         mediaGeneration++
+        renderedAudioEnd = null
         _currentTrack.value = track
         _currentPositionMs.value = startPosition
         requestedStartPositionMs = startPosition
@@ -854,7 +876,13 @@ class PlaybackCoordinator(
             try {
                 // Player creation and reset can fail too (audio service/decoder/cache failures).
                 // Keep them inside the same error boundary as resolution and preparation.
-                cacheInvalidation?.await()
+                val pendingInvalidation = cacheInvalidation
+                try { pendingInvalidation?.await() }
+                finally {
+                    // Cancellation of this request must not release an unfinished cache writer.
+                    if (cacheInvalidation === pendingInvalidation && pendingInvalidation?.isCompleted == true)
+                        cacheInvalidation = null
+                }
                 player.stop()
                 player.playWhenReady = false
                 var stageStart = SystemClock.elapsedRealtime()
