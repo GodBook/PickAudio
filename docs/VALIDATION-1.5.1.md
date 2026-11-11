@@ -2,7 +2,7 @@
 
 日期：2026-11-11（Asia/Shanghai）。目标：修复 QQ 播放和下载可能接受半首音频的问题，测试后更新 GitHub 和正式 Release。
 
-状态：实现与手机回归中，尚未发布。工作分支 `codex/fix-qq-complete-audio`；原有未提交文档整理不属于本次提交。
+状态：QQ 完整性校验和自动修复已实现，最终源码 `498727674c1a3da70fa6d2c0cfd3cd5836b4f9ea` 已通过本地构建、USB 真机定向回归与 CI 四组设备矩阵；正式发布等待原签名凭据。工作分支 `codex/fix-qq-complete-audio`，PR [#7](https://github.com/GodBook/PickAudio/pull/7)；原有未提交文档整理不属于本次提交。
 
 ## 已确认的行为
 
@@ -14,36 +14,40 @@
 
 ## 验收与证据
 
-当前 92 项 JVM 回归通过。USB 小米 9 SE（`1944b301`，Android 15/API 35）首次 14 项 QQ 专项通过；同一手机《夜曲》226 秒真实 AAC 样本的后 75% 定位、末尾定位、自然结束、完整下载与逐字节比对通过（6.150 秒）。
+本地设备为 USB 小米 9 SE（`1944b301`，Android 15/API 35）。最终源码 `4987276` 的验证如下，原始日志均在被 Git 忽略的 `app/build/qq-reproduction/`。
 
-随后 `fb45df6` 的完整 Debug 手机回归 117/117 通过，耗时 519.675 秒，无失败或跳过，包含缓存拒绝后重取及使用实际 PlaybackCoordinator/PCM sink 的默认完整音频用例。独立复核补充了缓存失效异常后的恢复和已缓存 QQ 单曲在后端离线时继续循环；该后续改动正在重建和补测，不使用先前结果冒充最终结果。
+| 验证 | 结果与证据 |
+| --- | --- |
+| JVM、构建与静态检查 | 94 项通过；Debug、validation 主/测试 APK、Release 构建通过；Lint 0 错误/77 警告；Room schema 2..5 通过 |
+| 真机 Debug 服务与 QQ 播放回归 | 14/14，133.122 秒；`phone-service-lifecycle-debug.log` |
+| 真机 validation 服务、播放、自动修复与界面 | 25/25，132.742 秒；`phone-final-validation-regression.log` |
+| 真机 validation 网络中断与播放稳定性整组 | 8/8，270.797 秒；`phone-final-transport-stability.log` |
+| 最终源码 CI | [run 43010220260](https://github.com/GodBook/PickAudio/actions/runs/43010220260) attempt 2：构建与 API 35/36 Debug/validation 四组均通过，各 130/130；API 35 Debug 为同源码同断言复跑通过，日志 `ci-final-debug35-rerun.log` |
 
-`0790867` 的播放、缓存与默认完整音频 8 项手机专项通过（24.289 秒），包括音源与 CDN 均不可用时复用完整缓存继续单曲循环。该版之后用户增加“自动检测不完整下载并重新下载”的要求；正在增加前台扫描、下载页状态、成功检查指纹复用和一次性自动重下，并进行独立回归。暂停、取消和已失败任务不会被扫描自动复活。
+在最终服务身份保护之前，含自动修复的 `613d69a` 真机完整 Debug 128/128 通过（526.293 秒，`phone-full-auto-debug-rerun.log`）；`9449638` 真机完整 validation 129/129 通过（474.767 秒，`phone-full-validation-final.log`）。这些是前序基线，不能替代上表最终源码的回归。
 
-自动修复实现的 94 项 JVM 测试通过；16 项手机专项通过（32.373 秒）：9 项下载自动修复、1 项真实前台/下载页入口、6 项播放完整性与非阻塞修复通知。覆盖完整替换、指纹复用/文件变化/强制检查、原文件保留、旧状态与并发暂停/取消、失败后不循环、未知时长与个人导入排除。
+自动修复专项覆盖完整替换、检查指纹复用/文件变化/强制检查、原文件保留、旧状态与并发暂停/取消、失败后不循环、未知时长与个人导入排除。进入前台和播放异常通知接入真实界面；只修复应用拥有、可信原曲时长明确的已完成下载，沿用原任务、原音质、Wi-Fi 偏好与并发限制。暂停、取消和已失败任务不会自动复活，读取异常或持续变化的文件不会被武断判为不完整。
 
-包含自动修复的手机完整 Debug 回归重跑 128/128 通过（526.293 秒，无失败或跳过）。前一轮在 ThemeSettingsTest 发生一次 Compose `performMeasureAndLayout called during measure layout` 崩溃；同机主题专项随后连续两次各 2/2 通过（8.087/8.114 秒），完整重跑也通过，未据此宣称根因已修复。
+《夜曲》真实完整 AAC 样本（MID `001zMQr71F1Qo8`，5,499,068 字节，226.905 秒）经生产 PlaybackCoordinator/PCM sink 与 QQ 缓存路径，在真机通过 75% 定位、末尾定位、自然结束、完整下载与逐字节比对。Debug 用例耗时 7.800 秒（`phone-real-yequ-coordinator.log`），validation 用例 4.825 秒（`phone-real-yequ-validation.log`）。样本 SHA-256 为 `6b59c09ede0cdcc93185ccc356562f36b5737604b11dc297721b689440447e1b`，不进入源码库或发布资产。
 
-手机 validation 的自动修复/界面/播放/缓存 18 项通过（26.821 秒）；真实《夜曲》生产播放器专项在同一裁剪变体通过（4.825 秒）。Release 与 validation 主/测试 APK 构建通过。Lint 0 错误、68 警告；Room schema 2..5 核查通过。
+## 失败记录与限制
 
-CI `613d69a` 暴露两个边界：文件实际已经截短但 MediaProvider 稍后更新生成号，扫描前后指纹变化会跳过本次修复；已加同次扫描的一次有界重查和确定性竞态用例。另新增超时诊断读取 ActivityScenario.state 时错误地在主线程调用测试框架接口，已删除该诊断字段，保留原超时与其余服务状态输出。后续提交正在重新构建验证。
+- 早期服务停止/重试专项多次超时；`9449638` 的诊断捕获重试后 `PAUSED/message=null/services=[]`。`4987276` 用服务实例身份隔离创建、就绪和迟到销毁，并为旧包装器释放保留服务所有权，增加确定性回归；未放宽 20 秒断言。
+- CI `613d69a` 发现 MediaProvider 生成号延迟更新导致检查前后指纹变化，现同次扫描有一次有界重查，配有确定性竞态用例；持续变化仍跳过。测试诊断中错误读取主线程 ActivityScenario.state 的字段已删除。
+- 最终源码 CI 首轮 API 35 Debug 的 `PlaybackStabilityTest.exhaustedTransportRetriesReResolveAndResumeFromSavedPosition` 超时（129/130）；其他三组均通过。只重跑失败任务，同源码同断言 130/130 通过，真机对应稳定性整组 8/8 通过。报告未给出具体等待阶段，测试存在短暂恢复状态的观测窗口；不将复跑通过等同于已定位修复首轮超时。
+- 真机早期完整 Debug 出现一次 Compose `performMeasureAndLayout called during measure layout` 崩溃。同机主题专项随后连续两次各 2/2，完整重跑 128/128；未宣称已修复该间歇崩溃。另一次锁屏/Dozing 导致的无可见 UI 失败不计为通过。
+- 真机直接联网默认 QQ 音源的临时专项失败：初次没有默认网络/DNS；临时开启 Wi-Fi 后接口仍不可用，电脑同时间请求返回 `110001` / “cookie异常：账号被风控无法获取”。该失败与已通过的完整真实样本明确区分，上游可用性仍不受本次修复控制。
 
-`9449638` 的 94 项 JVM、手机 Debug 15 项定向回归（54.346 秒）、手机完整 validation 129/129（474.767 秒）通过；CI 构建及 API 35 validation、API 36 Debug/validation 三组各 129/129 通过。API 35 Debug 仍在服务重试专项失败；新增诊断终于捕获到 retry 后 `PAUSED/message=null/services=[]`，故不再按单纯等待超时处理。正在给服务实例创建/就绪/销毁加身份保护，并增加确定性的迟到销毁回归，避免旧服务清除新重试；未放宽原 20 秒断言。
+## 设备与候选包收尾
 
-另进行了手机直接连接默认 QQ 音源的临时联网专项。首次手机无默认网络/DNS 失败；临时开启原有 Wi-Fi 后能联网，但音源返回不可用。电脑同时复查接口得到 `110001` / “cookie异常：账号被风控无法获取”。该联网专项明确失败，不与已通过的真实样本测试混淆；稍早取得的完整样本在手机已经通过。Wi-Fi 原为关闭，结束时与充电常亮设置一并恢复。
+`-PisolatedTests=true` 让 Debug/validation 使用 `com.pickaudio.qqtest` 及独立测试包、Provider 和升级夹具，保护原正式版与数据。2026-11-11 已卸载两个临时测试包，确认公共测试音乐目录为空，恢复 Wi-Fi 关闭和 `stay_on_while_plugged_in=0`，重新打开原正式版。手机仅保留原 `com.pickaudio` v1.5.0；原 APK 前后 SHA-256 一致：`fe40c85bfeeda6403f162d1be31f25b4935738846a40c4b120d1a55c7b01f281`。
 
-使用生产 PlaybackCoordinator/PCM sink 与 QQ 缓存路径的《夜曲》真实样本专项在手机通过（7.800 秒），包含 75% 与末尾定位、自然结束、完整下载逐字节比对。样本 SHA-256 为 `6b59c09ede0cdcc93185ccc356562f36b5737604b11dc297721b689440447e1b`。
-
-旧提交 `0790867` 的 CI 构建及 API 35/36 Debug 各 117 项通过；两组 validation 均在已有服务停止/重试专项超时（116/117），与 v1.5.0 已记录的间歇故障同名，但当前原因尚未定位，保留为失败，不将其计为通过。正在补充有阶段与状态的超时诊断，并对最终包含自动修复的提交重新验收。
-
-首次完整手机回归受到设备进入 Dozing/锁屏影响，多个 Compose 用例没有可见 UI；该轮不计为通过。已记录原来的 `stay_on_while_plugged_in=0`，测试期间临时设为充电常亮，测试结束恢复。
-
-为保留手机现有 `com.pickaudio` 正式版与数据，增加 `-PisolatedTests=true` 构建选项：Debug/validation 使用 `com.pickaudio.qqtest` 及独立测试包、Provider 和升级夹具，Release 包名和签名策略不变。已核对手机原正式 APK 仍为 v1.5.0，SHA-256 `fe40c85bfeeda6403f162d1be31f25b4935738846a40c4b120d1a55c7b01f281`。
-
-待执行：最终整组 Debug/validation 回归、Lint、最终 Release、原签名及公开下载核验。原始日志与临时真实样本位于 `app/build/qq-reproduction/`；真实音乐文件不进入源码库或发布资产。
+最终未签名 Release 候选为 `app/build/outputs/apk/release/app-release-unsigned.apk`，1.5.1/code 20，8,277,538 字节，SHA-256 `25a2904e86b017560f12379fc9f81e48cbca60f6c6cfa30ff39eeb667ccf648c`。包信息及 ZIP/ELF 16 KiB 对齐核查通过；`publishable=false`，不能作为正式升级包发布。
 
 ## 下一步
 
 按用户要求全部改用 USB 手机继续回归。本轮新建的模拟器 `PickAudio_QQ_API36_20261111` 已关闭，其虚拟设备文件夹、注册 INI 和 SDK 中的 emulator 程序目录均送入 Windows 回收站，并查询确认可恢复；不再使用电脑模拟器。
 
-完成最终测试后检查远端 CI，沿用原签名发布 v1.5.1/code 20。原证书 SHA-256 为 `1e564b554f48b6a69d80e6d76c704e8b16e9a600d2511205754839c729d4a281`。当前 `release.jks` 仍在，但旧 `app/build/release-1.5.0/sign-local.ps1` 依赖的 `app/build/release-1.4.5/sign-release.ps1` 已缺失，且当前无签名环境凭据；签名恢复后才可发布可覆盖升级的正式 APK，根目录 `version.json` 在实际公开前保持 1.5.0。
+GitHub 源码更新通过 PR [#7](https://github.com/GodBook/PickAudio/pull/7) 交付，最终补充提交仅修改本验证记录与发布说明，`app` 源码及版本配置与已测试的 `4987276` 完全相同。v1.5.1/code 20 Release 草稿 ID 为 `441512226`，尚未发布且没有安装包资产。
+
+正式发布仍缺原签名凭据。原证书 SHA-256 为 `1e564b554f48b6a69d80e6d76c704e8b16e9a600d2511205754839c729d4a281`。`release.jks` 仍在，但旧 `app/build/release-1.5.0/sign-local.ps1` 依赖的 `app/build/release-1.4.5/sign-release.ps1` 已缺失，现有环境、凭据管理器及历史辅助脚本未找回密码。已准备签名与证书核验脚本；恢复凭据后需验证原签名覆盖升级、上传 APK/校验文件、验证公开下载。根目录 `version.json` 在实际公开前保持 1.5.0，不用新证书或未签名 APK 代替正式包。
