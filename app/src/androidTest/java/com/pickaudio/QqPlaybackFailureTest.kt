@@ -70,7 +70,7 @@ class QqPlaybackFailureTest {
         return "ui=${coordinator.uiState.value},playRequested=${coordinator.playRequested.value}," +
             "playing=${coordinator.isPlaying.value},position=${coordinator.currentPositionMs.value}," +
             "duration=${coordinator.durationMs.value},index=${coordinator.currentIndex.value}," +
-            "track=${coordinator.currentTrack.value?.id},activity=${compose.activityRule.scenario.state}," +
+            "track=${coordinator.currentTrack.value?.id}," +
             "services=[$services]"
     }
 

@@ -144,8 +144,30 @@ class QqAutomaticRepairTest {
             // Mutate the actual provider file without updating our task or local asset records.
             context.contentResolver.openOutputStream(Uri.parse(old.targetUri), "wt")!!.use { it.write(audio(2)) }
             val changed = coordinator.repairIncompleteDownloads(scheduleNow = false)
-            assertEquals(1, changed.checked)
-            assertEquals(1, changed.requeued)
+            assertEquals(changed.toString(), 1, changed.checked)
+            assertEquals(changed.toString(), 1, changed.requeued)
+        }
+    }
+
+    @Test fun aFileChangedDuringInspectionIsRecheckedWithinTheSameScan() = runBlocking {
+        MockWebServer().use { server ->
+            var inspections = 0
+            val coordinator = DownloadCoordinator(context, db, source(server.url("/unused.wav").toString()), scheduleOverride = {},
+                repairCheckpoint = { stage, taskId ->
+                    if (stage == "INSPECTED" && inspections++ == 0) {
+                        val target = db.downloadDao().getTaskById(taskId)!!.targetUri!!
+                        context.contentResolver.openOutputStream(Uri.parse(target), "wt")!!.use { it.write(audio(2)) }
+                    }
+                })
+            coordinator.recoverInterrupted()
+            val old = completed(audio(20))
+            val report = coordinator.repairIncompleteDownloads(scheduleNow = false)
+            assertEquals(report.toString(), 1, report.checked)
+            assertEquals(report.toString(), 1, report.requeued)
+            assertEquals(2, inspections)
+            assertEquals("PENDING", db.downloadDao().getTaskById(old.id)!!.status)
+            assertArrayEquals(audio(2), context.contentResolver.openInputStream(Uri.parse(old.targetUri!!))!!.use { it.readBytes() })
+            assertEquals(0, server.requestCount)
         }
     }
 

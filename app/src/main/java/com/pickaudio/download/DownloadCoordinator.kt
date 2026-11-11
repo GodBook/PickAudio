@@ -351,31 +351,48 @@ class DownloadCoordinator(
                     }
                     val uri = Uri.parse(value)
                     if (ownedMedia(uri)?.pending != false) { skipped++; continue }
-                    val fingerprint = integrityChecks.fingerprint(snapshot, expected)
+                    var fingerprint = integrityChecks.fingerprint(snapshot, expected)
                     if (!forceScan && asset.isAvailable && integrityChecks.wasChecked(snapshot.id, fingerprint)) {
                         skipped++
                         continue
                     }
                     checked++
                     var actualDuration: Long? = null
-                    val failure = try {
-                        val audio = AndroidAudioProbe.inspect(context, uri, validatePackets = true)
-                        actualDuration = audio.durationMs
-                        AudioCompleteness.failure(expected, audio.durationMs)
-                    } catch (e: CancellationException) { throw e }
-                    catch (e: Exception) {
-                        val reason = e.message.orEmpty()
-                        // Decoder/provider failures can be temporary. Only explicit packet or
-                        // duration evidence authorizes replacing a previously published file.
-                        if (reason !in setOf("WAV 文件内容被截断", "音频末尾不完整，请重新下载",
-                                "音频文件没有完整数据帧", "音频数据帧无效", "文件没有有效音频时长")) throw e
-                        reason
+                    var failure: String? = null
+                    var stable = false
+                    for (attempt in 0..1) {
+                        actualDuration = null
+                        failure = try {
+                            val audio = AndroidAudioProbe.inspect(context, uri, validatePackets = true)
+                            actualDuration = audio.durationMs
+                            AudioCompleteness.failure(expected, audio.durationMs)
+                        } catch (e: CancellationException) { throw e }
+                        catch (e: Exception) {
+                            val reason = e.message.orEmpty()
+                            // Decoder/provider failures can be temporary. Only explicit packet or
+                            // duration evidence authorizes replacing a previously published file.
+                            if (reason !in setOf("WAV 文件内容被截断", "音频末尾不完整，请重新下载",
+                                    "音频文件没有完整数据帧", "音频数据帧无效", "文件没有有效音频时长")) throw e
+                            reason
+                        }
+                        repairCheckpoint?.invoke("INSPECTED", snapshot.id)
+                        val after = integrityChecks.fingerprint(snapshot, expected)
+                        if (fingerprint == null || fingerprint == after) { stable = true; break }
+                        if (attempt == 0) {
+                            // MediaProvider may publish its size/generation after the file has
+                            // already changed. Re-inspect once in this scan instead of deferring
+                            // a known-short file until the next foreground event.
+                            delay(100)
+                            fingerprint = integrityChecks.fingerprint(snapshot, expected)
+                        }
                     }
-                    repairCheckpoint?.invoke("INSPECTED", snapshot.id)
-                    val after = integrityChecks.fingerprint(snapshot, expected)
-                    if (fingerprint != null && fingerprint != after) { skipped++; continue }
+                    if (!stable) {
+                        skipped++
+                        errors.add(DownloadRepairFailure(snapshot.id, snapshot.title, "检查期间文件仍在变化，请稍后重新检查"))
+                        continue
+                    }
                     if (failure == null) {
-                        if (fingerprint != null && after == fingerprint) integrityChecks.passed(snapshot.id, fingerprint)
+                        fingerprint?.let { integrityChecks.passed(snapshot.id, it) }
                         continue
                     }
                     val supported = capabilities[snapshot.platform] ?: sourceManager.supportedQualities(snapshot.platform)
