@@ -2,13 +2,15 @@
 
 Android 本地与在线音乐播放器，使用 Kotlin、Jetpack Compose、Room、Media3 和内嵌 QuickJS。无需账号，歌单、收藏和设置保存在设备上。
 
-[下载 APK](https://github.com/GodBook/PickAudio/releases/latest) · [1.5.0 更新说明](docs/RELEASE-1.5.0.md)
+[下载 APK](https://github.com/GodBook/PickAudio/releases/latest) · [1.5.1 更新说明](docs/RELEASE-1.5.1.md)
 
-当前版本为 **1.5.0（versionCode 19）**，支持 Android 15（API 35）及以上。
+当前版本为 **1.5.1（versionCode 20）**，支持 Android 15（API 35）及以上。
+
+v1.5.1 启用新签名。旧版 v1.5.0 无法覆盖升级：先在“设置 → 备份与恢复”导出并另存备份，单独保存音频和自定义音源脚本，再卸载旧版、安装新包并恢复备份/重新关联文件。旧版应用内更新会拒绝不同签名，请从上方 Release 页面下载。
 
 ## 使用
 
-1. 从 Releases 安装 APK。使用相同签名的正式版本可以覆盖升级。
+1. 从 Releases 安装 APK。v1.5.0 用户按上方说明迁移；后续使用本次新签名的版本可以覆盖升级。
 2. 在“导入音乐”中扫描手机音频、选择文件，或递归导入文件夹。
 3. 在线音乐可分别搜索网易云和 QQ；音乐源可在设置中切换，也可导入 LX 移动版音源脚本。
 4. 将歌曲加入歌单或播放队列。音乐库只显示主动加入或导入的歌曲，试听和收藏不会自动加入。
@@ -41,6 +43,8 @@ Android 本地与在线音乐播放器，使用 Kotlin、Jetpack Compose、Room�
 
 完成的音频保存在公共目录 `Music/PickAudio`。临时下载位于应用私有文件目录，暂停任务的进度不会随缓存清理删除。音质选择受音源支持范围限制，下载时检测容器、FLAC 位深和可解码性。
 
+应用回到前台时自动检查已完成下载，确认歌曲不完整后按原音质加入重下队列，保留旧文件并遵守 Wi-Fi 设置。“下载管理”右上角刷新按钮可手动检查完整性，暂停、取消和失败任务不会自动恢复。QQ 播放和下载均核对原曲时长及实际音频末尾。
+
 备份为带版本和 SHA-256 校验的 ZIP，包含歌单、收藏、歌曲记录、歌词及校准、偏好设置和音源描述，**不包含音频文件与完整音源脚本**。恢复前可预览内容，恢复后需重新关联的本地文件会列出；重复恢复采用增量合并。
 
 数据库迁移和旧备份兼容说明见各版[更新文档](docs/RELEASE-1.3.0.md)。
@@ -55,13 +59,14 @@ Android 本地与在线音乐播放器，使用 Kotlin、Jetpack Compose、Room�
 .\gradlew.bat :app:assembleRelease
 ```
 
-Debug APK 输出到 `app/build/outputs/apk/debug/app-debug.apk`。Release 默认生成未签名 APK；覆盖旧正式版需要使用原发布签名。版本号由 `version.properties` 管理。
+Debug APK 输出到 `app/build/outputs/apk/debug/app-debug.apk`。Release 默认生成未签名 APK；发布时按[签名记录](docs/SIGNING.md)复用固定的新证书签名。版本号由 `version.properties` 管理。
 
 设备测试的准备、命令和数据影响见[构建与发布说明](docs/BUILD-AND-RELEASE.md)。请指定测试设备序列号，部分用例会清空应用队列。
 
 ## 文档
 
-- [1.5.0 验证记录](docs/VALIDATION-1.5.0.md)：设备、CI、覆盖升级和性能测量范围。
+- [1.5.1 验证记录](docs/VALIDATION-1.5.1.md)：手机回归、CI、完整音频和新签名测试范围。
+- [发布签名](docs/SIGNING.md)：本机签名配置和旧版本迁移要求。
 - [音乐播放修复记录](docs/BUGFIX-QQ-PLAYBACK-1.4.2.md)。
 - [优化审查](docs/OPTIMIZATION-REVIEW-2026-10-15.md)与[实施记录](docs/OPTIMIZATION-EXECUTION-2026-10-15.md)。
 - [第三方来源与许可证](THIRD_PARTY_NOTICES.md)。

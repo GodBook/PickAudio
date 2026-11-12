@@ -1,8 +1,8 @@
 # v1.5.1 QQ 音频完整性修复与验证
 
-日期：2026-11-11（Asia/Shanghai）。目标：修复 QQ 播放和下载可能接受半首音频的问题，测试后更新 GitHub 和正式 Release。
+日期：2026-11-11～2026-11-12（Asia/Shanghai）。目标：修复 QQ 播放和下载可能接受半首音频的问题，测试后更新 GitHub 和正式 Release。
 
-状态：QQ 完整性校验和自动修复已实现，最终源码 `498727674c1a3da70fa6d2c0cfd3cd5836b4f9ea` 已通过本地构建、USB 真机定向回归与 CI 四组设备矩阵；2026-11-11 按使用者明确要求直接发布未签名构建，不再等待签名凭据。未签名 APK 无法直接安装，也没有完成原签名覆盖升级验收。源码 PR [#7](https://github.com/GodBook/PickAudio/pull/7) 已合并；原有未提交文档整理不属于本次提交。
+状态：QQ 完整性校验和自动修复已实现，最终源码 `498727674c1a3da70fa6d2c0cfd3cd5836b4f9ea` 已通过本地构建、USB 真机定向回归与 CI 四组设备矩阵。2026-11-12 按使用者“搞一个新的签名”的要求启用新证书，发布可安装 APK 并替换此前未签名资产；新旧签名不同，旧版需先备份再重装，不能覆盖升级。源码 PR [#7](https://github.com/GodBook/PickAudio/pull/7) 已合并；原有未提交文档整理不属于本次提交。
 
 ## 已确认的行为
 
@@ -44,7 +44,7 @@
 
 最终未签名 Release 候选为 `app/build/outputs/apk/release/app-release-unsigned.apk`，1.5.1/code 20，8,277,538 字节，SHA-256 `25a2904e86b017560f12379fc9f81e48cbca60f6c6cfa30ff39eeb667ccf648c`。包信息及 ZIP/ELF 16 KiB 对齐核查通过；`publishable=false`，不能作为正式升级包发布。
 
-## 发布结果
+## 首次发布记录（2026-11-11）
 
 本地回归按用户要求使用 USB 手机。本轮新建的模拟器 `PickAudio_QQ_API36_20261111` 已关闭，其虚拟设备文件夹、注册 INI 和 SDK 中的 emulator 程序目录均送入 Windows 回收站，并查询确认可恢复；不再使用电脑模拟器。
 
@@ -55,3 +55,15 @@ GitHub 源码更新通过 PR [#7](https://github.com/GodBook/PickAudio/pull/7) �
 通过 `gh release download` 回下载已发布 APK，8,277,538 字节及 SHA-256 与本地候选完全一致。匿名浏览器下载地址的 curl 检查连接超时；匿名资产 API 已收到部分 APK 数据，但未在 60 秒内完成，因此不将匿名全文件下载计为通过。Release 公开状态、tag 和资产服务端摘要已核实。
 
 本次遵照“不要签名，直接更新 release”的新要求，没有使用原证书或其他证书，也未操作手机正式版。Android 要求 APK 有签名才能安装，因此此发布仅提供未签名构建，不能当作可直接安装、覆盖升级的正式包。Release 说明与资产元数据均标明限制；未签名构建不设为 Latest，`version.json` 和应用内更新入口保留可安装的 v1.5.0。
+
+## 新签名交付（2026-11-12）
+
+使用者随后明确要求生成新签名。新证书 SHA-256 为 `c8728b534a21f89310b8edddfccc1b1f2f1a77dac0104e53871f2e4ed9a8a5ea`，RSA 3072 位。新密钥及 Windows 当前账户 DPAPI 加密的随机密码保存在本机持久签名目录，提供可复用的 `scripts/sign-release.ps1`，不依赖历史聊天记录或构建目录中的临时脚本。原 `release.jks` 未覆盖；详细方式见 [签名记录](SIGNING.md)。
+
+正式签名文件为 `PickAudio-v1.5.1-release.apk`，1.5.1/code 20，8,340,765 字节，SHA-256 为 `bba8a59c23d55da7e44042ddf7e574d419f857d7a3ac71c04a5535220748c1bd`。`apksigner verify`、版本/包名、双 ABI、ZIP/ELF 16 KiB 对齐通过，`publishable=true`。逐个比较 687 个原有 APK 文件，其内容和未签名候选完全一致，仅签名变化；因此应用源码仍为上表已通过 CI 的版本。
+
+为保护 USB 小米 9 SE 的正式版及数据，将已有隔离 validation 主包和测试包使用同一新证书重新签名，包名为 `com.pickaudio.qqtest` 和 `com.pickaudio.qqtest.test`，均安装成功。手机 17/17 回归通过，25.937 秒：自动修复界面入口 1 项、下载自动修复 10 项、QQ 播放完整性 6 项，日志 `new-signature/phone-new-signature-regression.log`。随后从实际 Activity 冷启动至下载页，确认“检查下载完整性”按钮可见，UI 记录 `new-signature/phone-new-signature-ui.xml`。这是隔离 validation 安装/功能验收，没有把它描述为 `com.pickaudio` 的原签名覆盖升级或正式包全新安装验收。
+
+测试后已卸载两个隔离包、恢复充电常亮为 0，Wi-Fi 仍关闭，公共测试音频目录为空，重新打开原正式版。手机原 `com.pickaudio` 仍为 v1.5.0，APK SHA-256 与前述原值一致；未删除其数据，也未因证书不兼容卸载旧版。
+
+同一 [v1.5.1 Release](https://github.com/GodBook/PickAudio/releases/tag/v1.5.1) 已替换为新签名安装包，移除未签名 APK，更新校验文件/资产说明并添加 `version.json`，设为 Latest。通过 `gh release download` 回下载 APK 和版本清单，字节数、签名、SHA-256 及清单与本地候选一致；GitHub 服务端摘要也一致。公开源码版本清单及 README 同步说明新签名的备份/重装要求。旧版应用内更新按原有签名校验拒绝不同证书，需由用户在备份后从 Release 页面安装。

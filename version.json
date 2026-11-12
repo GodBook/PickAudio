@@ -1,10 +1,13 @@
 {
-  "versionCode": 19,
-  "versionName": "1.5.0",
-  "changelog": "1. 搜索多选与当前显示范围一致，切换平台清空选择，换源保留播放状态和进度。\n2. 优化批量队列、拖动排序、下载文件核验与历史分页，批量命令反馈实际结果。\n3. 减少重复查询、写盘、通知、歌词加载和脚本轮询，重复导入复用未变化文件信息。\n4. 增加 Android 15 支持，保留原签名升级与数据库 v5。\n同机 Debug 测试中，批量队列操作主线程 p95 从约 584 ms 降至 21 ms；启动、滚动与续航收益仍待专项验证。",
-  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.5.0/PickAudio-v1.5.0-release.apk",
-  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.5.0",
-  "apkSize": 8291613,
-  "sha256": "fe40c85bfeeda6403f162d1be31f25b4935738846a40c4b120d1a55c7b01f281",
-  "publishTime": "2026-10-15"
+  "versionCode": 20,
+  "versionName": "1.5.1",
+  "changelog": "1. 自动检查应用已完成的下载，确认歌曲不完整后按原音质重新下载，保留旧文件并遵守仅 Wi-Fi 设置。\n2. 下载管理右上角新增“检查下载完整性”按钮与处理状态。\n3. 修复 QQ 试听片段、实际音频提前结束及损坏缓存被误判为完整歌曲的问题，完善播放重试。\n4. 按使用者要求启用新签名。旧版 v1.5.0 无法覆盖升级：先在“设置 → 备份与恢复”导出并另存备份，单独保存音频和自定义音源脚本，再卸载旧版、从 Release 页面安装新包并恢复备份/重新关联文件。旧版应用内更新会因签名不同而拒绝安装。",
+  "downloadUrl": "https://github.com/GodBook/PickAudio/releases/download/v1.5.1/PickAudio-v1.5.1-release.apk",
+  "releasePageUrl": "https://github.com/GodBook/PickAudio/releases/tag/v1.5.1",
+  "apkSize": 8340765,
+  "sha256": "bba8a59c23d55da7e44042ddf7e574d419f857d7a3ac71c04a5535220748c1bd",
+  "publishTime": "2026-11-12",
+  "signerSha256": "c8728b534a21f89310b8edddfccc1b1f2f1a77dac0104e53871f2e4ed9a8a5ea",
+  "previousSignerSha256": "1e564b554f48b6a69d80e6d76c704e8b16e9a600d2511205754839c729d4a281",
+  "requiresReinstallForOldSignature": true
 }
