@@ -24,7 +24,7 @@ class BuiltinQqMusicTest {
     @Test fun persistentBackendFailureStopsAfterTwoRequests() = runBlocking {
         MockWebServer().use { server ->
             repeat(2) { server.enqueue(MockResponse().setBody("""{"code":110000,"data":null}""")) }
-            assertTrue(runCatching { BuiltinQqMusicAdapter(OkHttpClient(), server.url("/resolve").toString()).resolve("002qU5aY3Qu24y", "128k") }.isFailure)
+            assertTrue(runCatching { BuiltinQqMusicAdapter(OkHttpClient(), server.url("/resolve").toString()).resolve("002qU5aY3Qu24y", "flac") }.isFailure)
             assertEquals(2, server.requestCount)
         }
     }
@@ -60,9 +60,39 @@ class BuiltinQqMusicTest {
             MockWebServer().use { server ->
                 server.enqueue(MockResponse().setBody("""{"code":0,"data":{"songMID":"original","url":"${server.url("/expired.mp3")}"}}"""))
                 server.enqueue(response)
+                server.enqueue(MockResponse().setBody("""{"code":110001,"data":null}"""))
                 val result = runCatching { BuiltinQqMusicAdapter(OkHttpClient(), server.url("/resolve").toString()).resolve("original", "128k") }
                 assertTrue(result.isFailure)
             }
+        }
+    }
+
+    @Test fun standardFailureUsesSameRecordingAtHigherQuality() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"code":110001,"data":null}"""))
+            val url = server.url("/M800same.mp3").toString()
+            server.enqueue(MockResponse().setBody("""{"code":0,"data":{"songMID":"same","url":"$url"}}"""))
+            server.enqueue(MockResponse().setResponseCode(206).setHeader("Content-Range", "bytes 0-4095/9075745")
+                .setBody("ID3\u0003\u0000\u0000audio-data"))
+            assertEquals(url, BuiltinQqMusicAdapter(OkHttpClient(), server.url("/resolve").toString()).resolve("same", "128k", 226000))
+            assertEquals("4", server.takeRequest().requestUrl!!.queryParameter("quality"))
+            val fallback = server.takeRequest().requestUrl!!
+            assertEquals("same", fallback.queryParameter("mid"))
+            assertEquals("8", fallback.queryParameter("quality"))
+        }
+    }
+
+    @Test fun validMp3HeaderWithOnlySixtySecondsIsRejectedBeforePlayback() = runBlocking {
+        MockWebServer().use { server ->
+            val short = server.url("/M500same.mp3").toString()
+            val full = server.url("/M800same.mp3").toString()
+            for ((url, length) in listOf(short to 960887, full to 9075745)) {
+                server.enqueue(MockResponse().setBody("""{"code":0,"data":{"songMID":"same","url":"$url"}}"""))
+                server.enqueue(MockResponse().setResponseCode(206).setHeader("Content-Range", "bytes 0-4095/$length")
+                    .setBody("ID3\u0003\u0000\u0000audio-data"))
+            }
+            assertEquals(full, BuiltinQqMusicAdapter(OkHttpClient(), server.url("/resolve").toString()).resolve("same", "128k", 226000))
+            assertEquals(4, server.requestCount)
         }
     }
 }

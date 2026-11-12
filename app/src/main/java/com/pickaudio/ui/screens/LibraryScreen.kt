@@ -59,6 +59,7 @@ fun LibraryScreen(
     val allTracks = browserState.allTracks
     val filterShort by prefs.filterShortAudio.collectAsStateWithLifecycle(initialValue = true)
     val importState by libraryRepository.importProgress.collectAsStateWithLifecycle()
+    val refreshState by libraryRepository.refreshState.collectAsStateWithLifecycle()
     val current by playbackCoordinator.currentTrack.collectAsStateWithLifecycle()
     val playing by playbackCoordinator.isPlaying.collectAsStateWithLifecycle()
     val pendingDownloads by app.downloadCoordinator.pendingCount.collectAsStateWithLifecycle(initialValue = 0)
@@ -110,6 +111,10 @@ fun LibraryScreen(
                 if (LocalDensity.current.fontScale <= 1.3f) Text("${allTracks.size} 首主动添加的音乐", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }, colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background), actions = {
+            IconButton(onClick = { libraryRepository.requestRefresh() }, enabled = !refreshState.running) {
+                if (refreshState.running) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                else Icon(Icons.Default.Refresh, "刷新曲库，清理已删除文件")
+            }
             IconButton(onClick = onNavigateToDownload) {
                 BadgedBox(badge = { if (pendingDownloads > 0) Badge { Text(pendingDownloads.toString()) } }) { Icon(Icons.Default.Download, stringResource(com.pickaudio.R.string.ui_libraryscreen_019)) }
             }
@@ -121,6 +126,8 @@ fun LibraryScreen(
               Column(Modifier.fillMaxWidth()) {
             MusicSearchField(query, { query = it }, stringResource(com.pickaudio.R.string.ui_libraryscreen_002),
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+            refreshState.message?.let { Text(it, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) }
             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween) {
                 Box {

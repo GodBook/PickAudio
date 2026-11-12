@@ -110,6 +110,22 @@ class BuiltinStellarWaveTest {
         } finally { db.close() }
     }
 
+    @Test fun qqV2MigratesAnOldBuiltinSelectionOnlyOnce() = runBlocking {
+        val db = database()
+        try {
+            LxSourceManager(context, db).use { it.ensureBuiltinSources() }
+            val old = db.sourceDao().getSourceById(LxSourceManager.BUILTIN_QQ_ID)!!
+            db.sourceDao().insertOrUpdate(old.copy(version = "1.0.0", scriptHash = "builtin_qq_v1"))
+            db.sourceDao().setPlatformSelection(PlatformSourceSelectionEntity("tx", "builtin_aggregate"))
+            LxSourceManager(context, db).use { it.ensureBuiltinSources() }
+            assertEquals(LxSourceManager.BUILTIN_QQ_ID, db.sourceDao().getSelectionForPlatform("tx")!!.sourceId)
+            assertEquals("1.1.0", db.sourceDao().getSourceById(LxSourceManager.BUILTIN_QQ_ID)!!.version)
+            db.sourceDao().setPlatformSelection(PlatformSourceSelectionEntity("tx", "builtin_aggregate"))
+            LxSourceManager(context, db).use { it.ensureBuiltinSources() }
+            assertEquals("builtin_aggregate", db.sourceDao().getSelectionForPlatform("tx")!!.sourceId)
+        } finally { db.close() }
+    }
+
     private data class ScriptRequest(val id: Long, val url: String, val options: String)
 
     @Test fun bundledScriptPatchKeepsExistingBindingsAndDisabledState() = runBlocking {

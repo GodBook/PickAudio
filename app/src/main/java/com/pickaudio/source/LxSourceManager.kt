@@ -13,6 +13,7 @@ import com.pickaudio.data.db.SourceScriptEntity
 import com.pickaudio.data.model.SearchSongItem
 import com.pickaudio.online.AlternativeVersionException
 import com.pickaudio.online.BuiltinQqMusicAdapter
+import com.pickaudio.online.AudioCompleteness
 import com.pickaudio.online.NetEaseSearchAdapter
 import com.pickaudio.online.QqMusicPlaybackAdapter
 import com.pickaudio.online.QqMusicSearchAdapter
@@ -428,16 +429,18 @@ class LxSourceManager(
                 if (currentStellarWave?.scriptHash != hash) sourceDao.insertOrUpdate(stellarWave)
                 if (firstInstall) sourceDao.replacePlatformSelection("wy", builtinId, BUILTIN_STELLARWAVE_ID)
                 sourceDao.insertDefaultPlatformSelection(PlatformSourceSelectionEntity("wy", BUILTIN_STELLARWAVE_ID))
-                val firstQqInstall = sourceDao.getSourceById(BUILTIN_QQ_ID) == null
-                if (firstQqInstall) {
+                val previousQq = sourceDao.getSourceById(BUILTIN_QQ_ID)
+                if (previousQq?.version != "1.1.0") {
                     sourceDao.insertOrUpdate(SourceScriptEntity(
-                        id = BUILTIN_QQ_ID, name = "拾音 QQ 直连", version = "1.0.0", author = "PickAudio",
-                        description = "按 QQ 原曲编号解析完整音频，支持标准、高品质和 FLAC；校验歌曲身份和音频内容，拒绝试听片段。",
-                        homepage = "https://github.com/GodBook/PickAudio", scriptHash = "builtin_qq_v1",
+                        id = BUILTIN_QQ_ID, name = "拾音 QQ 直连", version = "1.1.0", author = "PickAudio",
+                        description = "按 QQ 原曲编号校验音频；标准线路失败时尝试同曲高品质，高品质失败时尝试 FLAC。实际音质以播放页为准。",
+                        homepage = "https://github.com/GodBook/PickAudio", scriptHash = "builtin_qq_v2",
                         scriptContent = "// PickAudio native QQ source",
-                        capabilitiesJson = """{"tx":{"platform":"tx","name":"QQ音乐","actions":["musicUrl"],"qualities":["128k","320k","flac"]}}"""))
+                        capabilitiesJson = """{"tx":{"platform":"tx","name":"QQ音乐","actions":["musicUrl"],"qualities":["128k","320k","flac"]}}""",
+                        isEnabled = previousQq?.isEnabled ?: true,
+                        createdAt = previousQq?.createdAt ?: System.currentTimeMillis()))
                     val previous = sourceDao.getSelectionForPlatform("tx")?.sourceId
-                    if (previous in setOf(builtinId, BUILTIN_STELLARWAVE_ID) && sourceDao.getSourceById(previous!!)?.isEnabled == true) {
+                    if (previousQq?.isEnabled != false && previous in setOf(builtinId, BUILTIN_STELLARWAVE_ID) && sourceDao.getSourceById(previous!!)?.isEnabled == true) {
                         sourceDao.replacePlatformSelection("tx", previous, BUILTIN_QQ_ID)
                     }
                 }
@@ -462,20 +465,22 @@ class LxSourceManager(
         artist: String? = null, network: Network? = null
     ): MusicResource = withContext(Dispatchers.IO) {
         try {
-            withTimeout(15000) {
+            withTimeout(20000) {
                 ensureBuiltinSources()
                 val selection = sourceDao.getSelectionForPlatform(platform)
                 val sourceId = selection?.sourceId ?: if (selection == null) defaultSourceId(platform) else null
                 if (selection != null && sourceId == null) error("未配置音乐源，请选择支持此平台的音源后重试")
                 val supported = supportedQualities(platform)
                 require(quality in supported) { "当前音源不支持所选音质，请选择：${supported.joinToString()}" }
-                val metadata = if (sourceId == BUILTIN_QQ_ID) "{}" else platformMetadata(platform, songId, network)
+                val metadata = platformMetadata(platform, songId, network)
                 var sourceIdentity = "builtin_aggregate:v132"
                 val url = if (sourceId == null || sourceId == "builtin_aggregate") {
                     resolveBuiltinMusicUrl(platform, songId, quality, title, artist, network, metadata)
                 } else if (sourceId == BUILTIN_QQ_ID) {
-                    sourceIdentity = "$BUILTIN_QQ_ID:v1"
-                    BuiltinQqMusicAdapter(audioClient(okHttpClient, network)).resolve(songId, quality)
+                    sourceIdentity = "$BUILTIN_QQ_ID:v2"
+                    val track = database.onlineRefDao().getByPlatformId(platform, songId)?.let { database.trackDao().getTrackById(it.trackId) }
+                    BuiltinQqMusicAdapter(audioClient(okHttpClient, network)).resolve(songId, quality,
+                        AudioCompleteness.expectedDurationMs(platform, metadata, track?.durationMs ?: 0))
                 } else {
                     val source = sourceDao.getSourceById(sourceId) ?: error("音源已移除")
                     sourceIdentity = "$sourceId:${source.scriptHash}"
@@ -503,7 +508,7 @@ class LxSourceManager(
                 MusicResource(networkPolicy.validate(url).toString(), sourceIdentity)
             }
         } catch (e: TimeoutCancellationException) {
-            throw IllegalStateException("音源解析超过 15 秒，请重试或更换音源", e)
+            throw IllegalStateException("音源解析超过 20 秒，请重试或更换音源", e)
         } catch (e: CancellationException) { throw e }
         catch (e: AlternativeVersionException) { throw e }
         catch (e: Exception) {
