@@ -45,4 +45,6 @@
 - APK SHA-256：`ace28614ef7451c0739187d8e3c1a3ef5043718ce041afc4eac78461603ba4e3`
 - 证书 SHA-256：`c8728b534a21f89310b8edddfccc1b1f2f1a77dac0104e53871f2e4ed9a8a5ea`
 
+手机收尾已移除两个独立测试包和两个中断测试遗留的夹具文件，恢复充电常亮设置为原值 0；保留正式版及重新下载的完整《夜曲》。
+
 原手机备份、数据库快照、完整命令日志和临时网络用例保存在本地忽略的 `app/build/qq-reproduction`；不发布私人备份、音频或凭据。最终发布地址：[v1.5.2](https://github.com/GodBook/PickAudio/releases/tag/v1.5.2)。
