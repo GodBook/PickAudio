@@ -48,10 +48,10 @@ class QqPlaybackFailureTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
     private val app get() = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as PickAudioApplication
 
-    private suspend fun await(label: String, timeoutMs: Long = 20_000, condition: () -> Boolean) {
+    private suspend fun await(label: String, condition: () -> Boolean) {
         Log.i("QqPlaybackFailureTest", "Awaiting $label")
         try {
-            withTimeout(timeoutMs) {
+            withTimeout(20_000) {
                 while (!withContext(Dispatchers.Main) { condition() }) delay(50)
             }
             Log.i("QqPlaybackFailureTest", "Completed $label")
@@ -59,7 +59,7 @@ class QqPlaybackFailureTest {
             currentCoroutineContext().ensureActive()
             val state = withContext(Dispatchers.Main) { diagnosticState() }
             Log.e("QqPlaybackFailureTest", "Timed out awaiting $label: $state", e)
-            throw AssertionError("Timed out after $timeoutMs ms awaiting $label: $state", e)
+            throw AssertionError("Timed out after 20000 ms awaiting $label: $state", e)
         }
     }
 
@@ -145,8 +145,7 @@ class QqPlaybackFailureTest {
             app.sourceManager.selectSourceForPlatform("tx", source.id)
             app.userPreferences.setDefaultOnlineQuality(Quality.Q128K)
             withContext(Dispatchers.Main) { coordinator.setQueueAndPlay(listOf(qq)) }
-            await("fixture: initial QQ ${if (pending) "resolution timeout" else "source rejection"} reaches ERROR",
-                timeoutMs = if (pending) 25_000 else 20_000) { coordinator.uiState.value.phase == PlaybackPhase.ERROR }
+            await("fixture: initial QQ ${if (pending) "resolution timeout" else "source rejection"} reaches ERROR") { coordinator.uiState.value.phase == PlaybackPhase.ERROR }
             block(coordinator, local)
         } finally {
             withContext(Dispatchers.Main) { coordinator.clearQueue() }
@@ -273,7 +272,7 @@ class QqPlaybackFailureTest {
 
     @Test fun qqResolutionTimeoutLeavesRetryableErrorAndOtherSongsCanPlay() = runBlocking {
         withFailureFixture(pending = true) { coordinator, local ->
-            assertTrue(coordinator.uiState.value.message.orEmpty().contains("20 秒"))
+            assertTrue(coordinator.uiState.value.message.orEmpty().contains("15 秒"))
             assertFalse(coordinator.playRequested.value)
             withContext(Dispatchers.Main) { coordinator.setQueueAndPlay(listOf(local)) }
             await("source timeout: following local playback advances") { coordinator.isPlaying.value && coordinator.currentPositionMs.value > 0 }
