@@ -464,51 +464,57 @@ class LxSourceManager(
         platform: String, songId: String, quality: String = "128k", title: String? = null,
         artist: String? = null, network: Network? = null
     ): MusicResource = withContext(Dispatchers.IO) {
+        var timeoutMs = 20_000L
         try {
-            withTimeout(20000) {
+            withTimeout(20_000) {
                 ensureBuiltinSources()
                 val selection = sourceDao.getSelectionForPlatform(platform)
                 val sourceId = selection?.sourceId ?: if (selection == null) defaultSourceId(platform) else null
                 if (selection != null && sourceId == null) error("未配置音乐源，请选择支持此平台的音源后重试")
-                val supported = supportedQualities(platform)
-                require(quality in supported) { "当前音源不支持所选音质，请选择：${supported.joinToString()}" }
-                val metadata = platformMetadata(platform, songId, network)
-                var sourceIdentity = "builtin_aggregate:v132"
-                val url = if (sourceId == null || sourceId == "builtin_aggregate") {
-                    resolveBuiltinMusicUrl(platform, songId, quality, title, artist, network, metadata)
-                } else if (sourceId == BUILTIN_QQ_ID) {
-                    sourceIdentity = "$BUILTIN_QQ_ID:v2"
-                    val track = database.onlineRefDao().getByPlatformId(platform, songId)?.let { database.trackDao().getTrackById(it.trackId) }
-                    BuiltinQqMusicAdapter(audioClient(okHttpClient, network)).resolve(songId, quality,
-                        AudioCompleteness.expectedDurationMs(platform, metadata, track?.durationMs ?: 0))
-                } else {
-                    val source = sourceDao.getSourceById(sourceId) ?: error("音源已移除")
-                    sourceIdentity = "$sourceId:${source.scriptHash}"
-                    withEngine(source.scriptContent, sourceId, network) { engine, _ ->
-                        val musicInfo = lxMusicInfo(platform, songId, metadata, title, artist)
-                        val request = JsonObject().apply {
-                            addProperty("source", platform); addProperty("action", "musicUrl")
-                            add("info", JsonObject().apply { addProperty("type", quality); add("musicInfo", musicInfo) })
-                        }
-                        val expression = """
-                            (function() {
-                                var handler = globalThis.__lx_handlers && globalThis.__lx_handlers.request;
-                                if (!handler) throw new Error("源脚本未注册 request 处理器");
-                                return handler($request);
-                            })()
-                        """.trimIndent()
-                        val parsed = JsonParser.parseString(engine.evaluateAsync(expression, "<resolve>"))
-                        when {
-                            parsed.isJsonPrimitive -> parsed.asString
-                            parsed.isJsonObject && parsed.asJsonObject.has("url") -> parsed.asJsonObject.get("url").asString
-                            else -> error("音源没有返回有效地址，请切换音源")
+                // Only the native QQ route needs time for its extra quality attempt.
+                // Keep scripts and other sources on their existing 15 second budget.
+                timeoutMs = if (sourceId == BUILTIN_QQ_ID) 20_000L else 15_000L
+                withTimeout(timeoutMs) {
+                    val supported = supportedQualities(platform)
+                    require(quality in supported) { "当前音源不支持所选音质，请选择：${supported.joinToString()}" }
+                    val metadata = platformMetadata(platform, songId, network)
+                    var sourceIdentity = "builtin_aggregate:v132"
+                    val url = if (sourceId == null || sourceId == "builtin_aggregate") {
+                        resolveBuiltinMusicUrl(platform, songId, quality, title, artist, network, metadata)
+                    } else if (sourceId == BUILTIN_QQ_ID) {
+                        sourceIdentity = "$BUILTIN_QQ_ID:v2"
+                        val track = database.onlineRefDao().getByPlatformId(platform, songId)?.let { database.trackDao().getTrackById(it.trackId) }
+                        BuiltinQqMusicAdapter(audioClient(okHttpClient, network)).resolve(songId, quality,
+                            AudioCompleteness.expectedDurationMs(platform, metadata, track?.durationMs ?: 0))
+                    } else {
+                        val source = sourceDao.getSourceById(sourceId) ?: error("音源已移除")
+                        sourceIdentity = "$sourceId:${source.scriptHash}"
+                        withEngine(source.scriptContent, sourceId, network) { engine, _ ->
+                            val musicInfo = lxMusicInfo(platform, songId, metadata, title, artist)
+                            val request = JsonObject().apply {
+                                addProperty("source", platform); addProperty("action", "musicUrl")
+                                add("info", JsonObject().apply { addProperty("type", quality); add("musicInfo", musicInfo) })
+                            }
+                            val expression = """
+                                (function() {
+                                    var handler = globalThis.__lx_handlers && globalThis.__lx_handlers.request;
+                                    if (!handler) throw new Error("源脚本未注册 request 处理器");
+                                    return handler($request);
+                                })()
+                            """.trimIndent()
+                            val parsed = JsonParser.parseString(engine.evaluateAsync(expression, "<resolve>"))
+                            when {
+                                parsed.isJsonPrimitive -> parsed.asString
+                                parsed.isJsonObject && parsed.asJsonObject.has("url") -> parsed.asJsonObject.get("url").asString
+                                else -> error("音源没有返回有效地址，请切换音源")
+                            }
                         }
                     }
+                    MusicResource(networkPolicy.validate(url).toString(), sourceIdentity)
                 }
-                MusicResource(networkPolicy.validate(url).toString(), sourceIdentity)
             }
         } catch (e: TimeoutCancellationException) {
-            throw IllegalStateException("音源解析超过 20 秒，请重试或更换音源", e)
+            throw IllegalStateException("音源解析超过 ${timeoutMs / 1000} 秒，请重试或更换音源", e)
         } catch (e: CancellationException) { throw e }
         catch (e: AlternativeVersionException) { throw e }
         catch (e: Exception) {
