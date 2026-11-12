@@ -30,6 +30,8 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 import androidx.room.withTransaction
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class RelinkConflictException(val otherTrackId: String, val otherTitle: String) : IllegalStateException("此文件已关联到《$otherTitle》，请确认是否转移关联")
 
@@ -38,6 +40,8 @@ data class ImportProgress(
     val total: Int? = null, val imported: Int = 0, val skipped: Int = 0, val failed: Int = 0,
     val message: String? = null, val updated: Int = 0, val shortSkipped: Int = 0
 )
+
+data class LibraryRefreshState(val running: Boolean = false, val removed: Int = 0, val message: String? = null)
 
 class LibraryRepository(
     private val context: Context,
@@ -61,6 +65,53 @@ class LibraryRepository(
     private val fingerprints = ImportFingerprints(context)
     private var artworkDirty = false
     private var artworkBytesSincePrune = 0L
+    private val refreshMutex = Mutex()
+    private val _refreshState = MutableStateFlow(LibraryRefreshState())
+    val refreshState = _refreshState.asStateFlow()
+
+    fun requestRefresh() {
+        if (_refreshState.value.running) return
+        scope.launch { refreshLibrary() }
+    }
+
+    /** Remove library membership only; favorites, playlists and the files themselves stay intact. */
+    suspend fun refreshLibrary(): Int = refreshMutex.withLock { withContext(Dispatchers.IO) {
+        _refreshState.value = LibraryRefreshState(running = true)
+        var removed = 0
+        try {
+            val assets = localAssetDao.getLibraryAssets().first().groupBy { it.trackId }
+            for ((trackId, snapshot) in assets) {
+                currentCoroutineContext().ensureActive()
+                if (database.onlineRefDao().getByTrackId(trackId) != null) continue
+                val missing = snapshot.isNotEmpty() && snapshot.all {
+                    it.sourceType != "BACKUP_HINT" && it.unavailableReason != DELETION_PENDING &&
+                        isAudioFileConfirmedMissing(context, Uri.parse(it.uri))
+                }
+                snapshot.filter { it.sourceType != "BACKUP_HINT" }.forEach {
+                    val access = checkAssetAccess(context, Uri.parse(it.uri))
+                    localAssetDao.updateAvailability(it.id, access.available, access.reason)
+                }
+                if (missing) database.withTransaction {
+                    val latest = localAssetDao.getAssetsForTrack(trackId)
+                    // A concurrent import/relink/download must invalidate this decision.
+                    if (latest.map { it.id to it.uri }.toSet() == snapshot.map { it.id to it.uri }.toSet() &&
+                        database.onlineRefDao().getByTrackId(trackId) == null &&
+                        latest.all { isAudioFileConfirmedMissing(context, Uri.parse(it.uri)) } &&
+                        trackDao.getTrackById(trackId)?.isInLibrary == true) {
+                        trackDao.removeFromLibrary(listOf(trackId))
+                        removed++
+                    }
+                }
+            }
+            _refreshState.value = LibraryRefreshState(removed = removed,
+                message = if (removed > 0) "已刷新，移除 $removed 首源文件已删除的音乐" else "已刷新，未发现源文件已删除的音乐")
+            removed
+        } catch (e: CancellationException) { _refreshState.value = LibraryRefreshState(); throw e }
+        catch (e: Exception) {
+            _refreshState.value = LibraryRefreshState(removed = removed, message = "刷新未完成，请检查文件权限后重试")
+            removed
+        }
+    } }
 
     private fun fileStamp(uri: Uri, sizeHint: Long? = null, modifiedHint: Long? = null): String? = runCatching {
         if (uri.scheme == "file") File(uri.path.orEmpty()).let { importStamp(it.length(), it.lastModified()) }

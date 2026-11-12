@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         (application as PickAudioApplication).downloadRepairMonitor.request()
+        (application as PickAudioApplication).libraryRepository.requestRefresh()
     }
     override fun onStop() { (application as PickAudioApplication).playbackCoordinator.setUiVisible(false); super.onStop() }
     var openDownloadsVersion by mutableIntStateOf(0)

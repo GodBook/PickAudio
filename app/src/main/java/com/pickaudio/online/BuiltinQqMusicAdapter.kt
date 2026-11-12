@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 
 /** Resolve the requested QQ recording, and check that the CDN actually serves audio. */
@@ -17,7 +18,28 @@ internal class BuiltinQqMusicAdapter(
     private val client: OkHttpClient,
     private val endpoint: String = "https://api.vkeys.cn/music/tencent/song/link"
 ) {
-    suspend fun resolve(songMid: String, quality: String): String {
+    suspend fun resolve(songMid: String, quality: String, expectedDurationMs: Long = 0): String {
+        // The standard route can be unavailable while the same recording is available at
+        // a higher quality. Never fall back to a title search or a lower quality preview.
+        val candidates = when (quality) {
+            "128k" -> listOf("128k", "320k")
+            "320k" -> listOf("320k", "flac")
+            else -> listOf(quality)
+        }
+        var failure: Exception? = null
+        for (candidate in candidates) {
+            try {
+                val result = withTimeoutOrNull(6000) { resolveQuality(songMid, candidate, expectedDurationMs) }
+                if (result != null) return result
+                failure = IOException("QQ 线路响应超时")
+            }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { failure = e }
+        }
+        throw IllegalStateException("此歌曲暂未取得完整音频，请稍后重试或更换音源", failure)
+    }
+
+    private suspend fun resolveQuality(songMid: String, quality: String, expectedDurationMs: Long): String {
         require(songMid.isNotBlank()) { "QQ 歌曲缺少编号" }
         val level = when (quality) {
             "128k" -> 4
@@ -29,7 +51,7 @@ internal class BuiltinQqMusicAdapter(
             .addQueryParameter("mid", songMid).addQueryParameter("quality", level.toString()).build())
             .header("User-Agent", "Mozilla/5.0").build()
         // The backend can return a transient 110000/500011 for a valid recording.
-        // Retry that same MID/quality once; never silently choose another song or quality.
+        // Retry that same MID/quality once before moving to the same song's higher quality.
         repeat(2) { attempt ->
             try {
                 val url = client.withResponse(request) { response ->
@@ -38,7 +60,7 @@ internal class BuiltinQqMusicAdapter(
                     check(response.isSuccessful) { "QQ 音源服务返回 ${response.code}" }
                     parseUrl(response.body?.readLimitedText(256 * 1024) ?: error("QQ 音源响应为空"), songMid)
                 }
-                verifyAudio(url)
+                verifyAudio(url, expectedDurationMs)
                 return url
             } catch (e: CancellationException) { throw e }
             catch (e: IOException) {
@@ -60,14 +82,28 @@ internal class BuiltinQqMusicAdapter(
             ?: error("QQ 音源没有返回播放地址")
         check(!url.pathSegments.last().startsWith("RS", ignoreCase = true)) { "QQ 音源仅返回试听片段，请换源" }
         check(url.username.isEmpty() && url.password.isEmpty()) { "QQ 音源返回了无效地址" }
-        return url.toString()
+        return if (!url.isHttps && (url.host == "stream.qqmusic.qq.com" || url.host.endsWith(".stream.qqmusic.qq.com")))
+            url.newBuilder().scheme("https").build().toString() else url.toString()
     }
 
-    private suspend fun verifyAudio(url: String) {
+    private suspend fun verifyAudio(url: String, expectedDurationMs: Long) {
         client.withResponse(Request.Builder().url(url).header("Range", "bytes=0-4095")
             .header("Accept-Encoding", "identity").header("Referer", "https://y.qq.com/")
             .header("User-Agent", "Mozilla/5.0").build()) { response ->
             check(response.isSuccessful) { "QQ 音频地址不可用（${response.code}），请重试或换源" }
+            val filename = response.request.url.pathSegments.last()
+            val bitrate = when {
+                filename.startsWith("M500") -> 128_000L
+                filename.startsWith("M800") -> 320_000L
+                else -> null
+            }
+            val totalBytes = if (response.code == 206)
+                response.header("Content-Range")?.substringAfterLast('/')?.toLongOrNull()
+            else response.body?.contentLength()?.takeIf { it > 0 }
+            // QQ's CBR MP3 preview can have a valid ID3 header. Check the whole resource
+            // size, not the range response size, against the independent catalogue length.
+            if (bitrate != null && totalBytes != null && expectedDurationMs > 0)
+                AudioCompleteness.requireComplete(expectedDurationMs, totalBytes * 8000 / bitrate)
             val bytes = response.body?.source()?.readByteArray(12) ?: error("QQ 音频为空")
             val magic = bytes.copyOfRange(0, 4).toString(Charsets.US_ASCII)
             val mp3 = bytes[0] == 0xff.toByte() && (bytes[1].toInt() and 0xe0) == 0xe0
